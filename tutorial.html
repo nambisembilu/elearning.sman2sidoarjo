@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tutorial Penggunaan — E-Learning SMAN 2 Sidoarjo</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --primary: #0f766e;
+      --primary-light: #ccfbf1;
+      --admin: #7c3aed;
+      --admin-light: #ede9fe;
+      --staff: #0369a1;
+      --staff-light: #e0f2fe;
+      --guru: #15803d;
+      --guru-light: #dcfce7;
+      --siswa: #b45309;
+      --siswa-light: #fef3c7;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --bg: #f8fafc;
+      --card: #ffffff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 15px;
+    }
+    /* ── Cover ── */
+    .cover {
+      background: linear-gradient(135deg, #042f2e 0%, #0f172a 55%, #1e3a5f 100%);
+      color: white;
+      padding: 80px 60px;
+      min-height: 340px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .cover-logo {
+      display: flex; align-items: center; gap: 14px;
+      font-size: 18px; font-weight: 600;
+    }
+    .cover-icon {
+      width: 48px; height: 48px;
+      background: #2dd4bf; border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px;
+    }
+    .cover h1 { font-size: 42px; font-weight: 700; line-height: 1.2; margin-top: 40px; }
+    .cover p  { color: rgba(255,255,255,.7); margin-top: 12px; max-width: 560px; font-size: 17px; }
+    .cover-meta { color: rgba(255,255,255,.45); font-size: 13px; margin-top: 36px; }
+    /* ── Layout ── */
+    .container { max-width: 1060px; margin: 0 auto; padding: 40px 32px; }
+    /* ── TOC ── */
+    .toc {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px 32px; margin-bottom: 44px;
+    }
+    .toc h2 { font-size: 17px; font-weight: 700; margin-bottom: 16px; color: var(--primary); }
+    .toc ol { padding-left: 22px; }
+    .toc li { margin: 6px 0; }
+    .toc a { color: var(--primary); text-decoration: none; }
+    .toc a:hover { text-decoration: underline; }
+    /* ── Section ── */
+    .section { margin-bottom: 60px; }
+    .section-title {
+      font-size: 28px; font-weight: 700; margin-bottom: 6px;
+      padding-bottom: 10px; border-bottom: 3px solid var(--primary);
+    }
+    .section-desc { color: var(--muted); margin-bottom: 28px; font-size: 14px; }
+    /* ── Role Badges ── */
+    .role-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 16px; margin-bottom: 36px; }
+    .role-card {
+      border-radius: 14px; padding: 20px 22px;
+      border: 2px solid;
+    }
+    .role-card.admin  { border-color: var(--admin);  background: var(--admin-light); }
+    .role-card.staff  { border-color: var(--staff);  background: var(--staff-light); }
+    .role-card.guru   { border-color: var(--guru);   background: var(--guru-light); }
+    .role-card.siswa  { border-color: var(--siswa);  background: var(--siswa-light); }
+    .role-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+    .role-card.admin h3  { color: var(--admin); }
+    .role-card.staff h3  { color: var(--staff); }
+    .role-card.guru  h3  { color: var(--guru); }
+    .role-card.siswa h3  { color: var(--siswa); }
+    .role-card ul { padding-left: 16px; font-size: 13px; color: var(--text); }
+    .role-card li { margin: 3px 0; }
+    /* ── Steps ── */
+    .steps { list-style: none; padding: 0; }
+    .steps li {
+      display: flex; gap: 16px; margin-bottom: 18px; align-items: flex-start;
+    }
+    .step-num {
+      min-width: 32px; height: 32px; border-radius: 50%;
+      background: var(--primary); color: white;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700; flex-shrink: 0;
+    }
+    .step-body { flex: 1; }
+    .step-body strong { display: block; font-size: 15px; margin-bottom: 4px; }
+    .step-body p, .step-body ul { font-size: 14px; color: var(--text); }
+    .step-body ul { padding-left: 18px; margin-top: 4px; }
+    /* ── Cards ── */
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 24px 28px; margin-bottom: 20px;
+    }
+    .card h3 { font-size: 16px; font-weight: 700; margin-bottom: 10px; }
+    /* ── Alert / tip boxes ── */
+    .tip, .warning, .info {
+      border-radius: 10px; padding: 14px 18px; margin: 14px 0; font-size: 14px;
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+    .tip     { background: #f0fdf4; border: 1px solid #86efac; color: #166534; }
+    .warning { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; }
+    .info    { background: #eff6ff; border: 1px solid #93c5fd; color: #1e40af; }
+    .tip-icon { font-size: 16px; flex-shrink: 0; }
+    /* ── Table ── */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 16px 0; }
+    th { background: #f1f5f9; padding: 10px 14px; text-align: left; font-weight: 600; border: 1px solid var(--border); }
+    td { padding: 9px 14px; border: 1px solid var(--border); vertical-align: top; }
+    tr:nth-child(even) td { background: #f8fafc; }
+    /* ── Badge ── */
+    .badge {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 600; letter-spacing: .4px;
+    }
+    .badge.admin  { background: var(--admin-light);  color: var(--admin); }
+    .badge.staff  { background: var(--staff-light);  color: var(--staff); }
+    .badge.guru   { background: var(--guru-light);   color: var(--guru); }
+    .badge.siswa  { background: var(--siswa-light);  color: var(--siswa); }
+    /* ── Mermaid wrapper ── */
+    .diagram {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px 20px;
+      margin: 24px 0; overflow-x: auto;
+    }
+    .diagram-title { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 16px; text-transform: uppercase; letter-spacing: .5px; }
+    .mermaid { display: flex; justify-content: center; }
+    /* ── Sub-section heading ── */
+    h2.sub { font-size: 21px; font-weight: 700; margin: 36px 0 14px; padding-left: 14px; border-left: 4px solid var(--primary); }
+    h3.sub { font-size: 17px; font-weight: 700; margin: 24px 0 10px; }
+    /* ── Divider ── */
+    hr { border: none; border-top: 1px solid var(--border); margin: 44px 0; }
+    /* ── Screen label ── */
+    .screen {
+      background: #1e293b; color: #e2e8f0; border-radius: 10px;
+      padding: 16px 20px; font-family: monospace; font-size: 13px;
+      margin: 12px 0; line-height: 1.8;
+    }
+    .screen .label { color: #94a3b8; }
+    .screen .val   { color: #2dd4bf; }
+    /* ── Print ── */
+    @media print {
+      .cover { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .card, .diagram { break-inside: avoid; }
+    }
+    @media (max-width: 640px) {
+      .cover { padding: 40px 24px; }
+      .cover h1 { font-size: 28px; }
+      .container { padding: 24px 16px; }
+      .role-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     COVER
+═══════════════════════════════════════════════════════════ -->
+<div class="cover">
+  <div class="cover-logo">
+    <div class="cover-icon">🏫</div>
+    <span>E-Learning SMAN 2 Sidoarjo</span>
+  </div>
+  <div>
+    <h1>Panduan Penggunaan<br>Sistem E-Learning</h1>
+    <p>Dokumen tutorial lengkap untuk semua peran pengguna — Admin, Staff Kurikulum, Guru, dan Siswa — dilengkapi diagram alur sistem.</p>
+  </div>
+  <div class="cover-meta">Versi 1.0 · Juni 2025 · SMAN 2 Sidoarjo</div>
+</div>
+
+<div class="container">
+
+<!-- ══════════════════════════════════════════════════════════
+     DAFTAR ISI
+═══════════════════════════════════════════════════════════ -->
+<div class="toc">
+  <h2>📋 Daftar Isi</h2>
+  <ol>
+    <li><a href="#gambaran">Gambaran Umum Sistem</a></li>
+    <li><a href="#login">Masuk ke Sistem (Login)</a></li>
+    <li><a href="#admin">Panduan Admin</a></li>
+    <li><a href="#staff">Panduan Staff Kurikulum</a></li>
+    <li><a href="#guru">Panduan Guru</a></li>
+    <li><a href="#siswa">Panduan Siswa</a></li>
+    <li><a href="#alur-sistem">Diagram Alur Lengkap</a></li>
+    <li><a href="#faq">Pertanyaan Umum (FAQ)</a></li>
+  </ol>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     1. GAMBARAN UMUM
+═══════════════════════════════════════════════════════════ -->
+<div class="section" id="gambaran">
+  <div class="section-title">1. Gambaran Umum Sistem</div>
+  <p class="section-desc">Memahami arsitektur, peran, dan alur umum sistem e-learning.</p>
+
+  <p>
+    Sistem E-Learning SMAN 2 Sidoarjo adalah platform berbasis web yang mengintegrasikan seluruh proses akademik — dari pengelolaan data kurikulum hingga pengumpulan tugas dan penilaian ujian — dalam satu dasbor yang berbasis peran (<em>role-based</em>).
+  </p>
+
+  <div class="diagram" style="margin-top:24px">
+    <div class="diagram-title">Arsitektur Sistem</div>
+    <div class="mermaid">
+graph TB
+    Browser["🌐 Browser Pengguna"]
+    FE["⚛️ Frontend<br/>(React + Vite)"]
+    BE["🟢 Backend<br/>(Express.js)"]
+    DB["🗄️ Database<br/>(MySQL)"]
+    UP["📁 File Storage<br/>(/uploads)"]
+
+    Browser --> FE
+    FE -->|"HTTP / REST API"| BE
+    BE --> DB
+    BE --> UP
+
+    subgraph Client
+      Browser
+      FE
+    end
+    subgraph Server
+      BE
+      DB
+      UP
+    end
+    </div>
+  </div>
+
+  <h2 class="sub">Empat Peran Pengguna</h2>
+  <div class="role-grid">
+    <div class="role-card admin">
+      <h3>🛡️ Admin</h3>
+      <ul>
+        <li>Kelola akun staff</li>
+        <li>Pantau log aktivitas</li>
+        <li>Kelola data siswa</li>
+        <li>Manajemen user (reset password, identifier)</li>
+      </ul>
+    </div>
+    <div class="role-card staff">
+      <h3>📋 Staff Kurikulum</h3>
+      <ul>
+        <li>Kelola guru & siswa</li>
+        <li>Atur kelas & mata pelajaran</li>
+        <li>Jadwal akademik & pelajaran</li>
+        <li>Rubrik & range nilai</li>
+        <li>Rekap semua nilai</li>
+      </ul>
+    </div>
+    <div class="role-card guru">
+      <h3>👨‍🏫 Guru</h3>
+      <ul>
+        <li>Lihat kelas yang diampu</li>
+        <li>Upload materi & tugas</li>
+        <li>Buat & nilai ujian</li>
+        <li>Kelola kelompok belajar</li>
+        <li>Rubrik & nilai akhir</li>
+      </ul>
+    </div>
+    <div class="role-card siswa">
+      <h3>🎓 Siswa</h3>
+      <ul>
+        <li>Lihat kelas & jadwal</li>
+        <li>Baca materi pembelajaran</li>
+        <li>Kumpulkan tugas</li>
+        <li>Kerjakan ujian</li>
+        <li>Pantau nilai</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sub">Hierarki Data Akademik</h2>
+  <div class="diagram">
+    <div class="diagram-title">Relasi Data Utama</div>
+    <div class="mermaid">
+graph LR
+    TA["📅 Tahun Ajaran<br/>(misal 2025/2026)"]
+    SM["📆 Semester<br/>(Ganjil / Genap)"]
+    KLS["🏠 Kelas<br/>(misal X-IPA-1)"]
+    MP["📖 Mata Pelajaran<br/>(misal Matematika)"]
+    KMPEL["🔗 Kelas-Mapel<br/>(Kelas + Mapel + Guru)"]
+    MATERI["📄 Materi"]
+    TUGAS["📝 Tugas"]
+    UJIAN["📋 Ujian"]
+    NILAI["🏆 Nilai"]
+
+    TA --> SM
+    TA --> KLS
+    MP --> KMPEL
+    KLS --> KMPEL
+    KMPEL --> MATERI
+    KMPEL --> TUGAS
+    KMPEL --> UJIAN
+    KMPEL --> NILAI
+    </div>
+  </div>
+
+  <table>
+    <tr><th>Komponen</th><th>Fungsi</th><th>Dikelola Oleh</th></tr>
+    <tr><td>Tahun Ajaran</td><td>Periode akademik (mis. 2025/2026)</td><td>Staff</td></tr>
+    <tr><td>Kelas</td><td>Grup siswa (X-IPA-1, XI-IPS-2, dst)</td><td>Staff</td></tr>
+    <tr><td>Mata Pelajaran</td><td>Definisi mapel per jenjang/jurusan</td><td>Staff</td></tr>
+    <tr><td>Kelas-Mapel</td><td>Relasi kelas + mapel + guru pengampu</td><td>Staff</td></tr>
+    <tr><td>Jadwal Pelajaran</td><td>Hari, waktu, ruang per kelas-mapel</td><td>Staff</td></tr>
+    <tr><td>Rubrik</td><td>Lingkup materi & tujuan pembelajaran</td><td>Staff / Guru</td></tr>
+    <tr><td>Materi</td><td>Konten belajar + file lampiran</td><td>Guru</td></tr>
+    <tr><td>Tugas</td><td>Pengumpulan & penilaian</td><td>Guru</td></tr>
+    <tr><td>Ujian</td><td>Soal pilihan ganda / esai</td><td>Guru</td></tr>
+  </table>
+</div>
+
+<hr/>
+
+<!-- ══════════════════════════════════════════════════════════
+     2. LOGIN
+═══════════════════════════════════════════════════════════ -->
+<div class="section" id="login">
+  <div class="section-title">2. Masuk ke Sistem (Login)</div>
+  <p class="section-desc">Semua pengguna menggunakan halaman login yang sama.</p>
+
+  <div class="diagram">
+    <div class="diagram-title">Alur Login</div>
+    <div class="mermaid">
+flowchart TD
+    A([Buka URL Aplikasi]) --> B{Sudah login?}
+    B -->|Ya| C[Redirect ke Dashboard]
+    B -->|Tidak| D[Halaman Login]
+    D --> E[Isi Identifier & Password]
+    E --> F[Klik Masuk]
+    F --> G{Kredensial valid?}
+    G -->|Tidak| H[Pesan error]
+    H --> E
+    G -->|Ya| I{Cek Role}
+    I -->|admin| J1[Dashboard Admin]
+    I -->|staff| J2[Dashboard Staff]
+    I -->|guru| J3[Dashboard Guru]
+    I -->|siswa| J4[Dashboard Siswa]
+    </div>
+  </div>
+
+  <h2 class="sub">Identifier Login per Peran</h2>
+  <table>
+    <tr><th>Peran</th><th>Identifier</th><th>Password Default</th></tr>
+    <tr><td><span class="badge admin">Admin</span></td><td>Ditetapkan oleh sistem</td><td>Diberikan oleh admin IT</td></tr>
+    <tr><td><span class="badge staff">Staff</span></td><td>NIP/NUPTK atau identifier khusus</td><td>Diberikan oleh admin</td></tr>
+    <tr><td><span class="badge guru">Guru</span></td><td>NIP/NUPTK</td><td><code>password</code> (ubah segera)</td></tr>
+    <tr><td><span class="badge siswa">Siswa</span></td><td>NISN</td><td><code>password</code> (ubah segera)</td></tr>
+  </table>
+
+  <div class="tip">
+    <span class="tip-icon">💡</span>
+    <div>Jika lupa password, gunakan fitur <strong>Lupa Password</strong> di halaman login. Masukkan identifier atau email, dan OTP akan dikirimkan untuk reset password.</div>
+  </div>
+
+  <h2 class="sub">Langkah Login</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Buka halaman aplikasi</strong>
+        <p>Ketikkan alamat URL sistem E-Learning di browser (Chrome, Firefox, atau Edge direkomendasikan).</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Klik tombol "Masuk"</strong>
+        <p>Tombol berada di pojok kanan atas halaman beranda, atau klik langsung ke halaman <code>/login</code>.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Isi form login</strong>
+        <ul>
+          <li><strong>Identifier</strong>: NIP/NUPTK (guru/staff) atau NISN (siswa)</li>
+          <li><strong>Password</strong>: password yang diberikan atau sudah diubah</li>
+        </ul>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Klik "Masuk"</strong>
+        <p>Sistem akan memverifikasi dan mengarahkan ke dashboard sesuai peran.</p>
+      </div>
+    </li>
+  </ol>
+</div>
+
+<hr/>
+
+<!-- ══════════════════════════════════════════════════════════
+     3. ADMIN
+═══════════════════════════════════════════════════════════ -->
+<div class="section" id="admin">
+  <div class="section-title">3. Panduan Admin 🛡️</div>
+  <p class="section-desc">Admin bertanggung jawab atas keamanan sistem, pengelolaan akun staff, dan pemantauan aktivitas.</p>
+
+  <div class="diagram">
+    <div class="diagram-title">Alur Kerja Admin</div>
+    <div class="mermaid">
+flowchart LR
+    LOGIN([Login Admin]) --> DASH[Dashboard]
+    DASH --> A1[Daftar Staff]
+    DASH --> A2[Log Aktivitas]
+    DASH --> A3[Data Siswa]
+    DASH --> A4[Manajemen User]
+
+    A1 -->|Tambah| A1A[Buat akun staff baru]
+    A1 -->|Ubah| A1B[Edit data staff]
+    A1 -->|Hapus| A1C[Nonaktifkan staff]
+
+    A2 -->|Lihat| A2A[Pantau semua aktivitas]
+    A2 -->|Filter| A2B[Cari berdasar waktu/aksi]
+
+    A4 -->|Reset Password| A4A[Ganti password user]
+    A4 -->|Ubah Identifier| A4B[Ganti username login]
+    A4 -->|Nonaktif/Aktif| A4C[Toggle status akun]
+    </div>
+  </div>
+
+  <h2 class="sub">Menu yang Tersedia</h2>
+  <table>
+    <tr><th>Menu</th><th>Fungsi</th></tr>
+    <tr><td>🏠 Beranda</td><td>Dashboard ringkasan: jumlah guru, siswa, kelas-mapel, tugas. Jadwal akademik & log aktivitas terbaru.</td></tr>
+    <tr><td>🛡️ Daftar Staff</td><td>Lihat, tambah, ubah, dan hapus (nonaktifkan) akun staff kurikulum.</td></tr>
+    <tr><td>📋 Log Aktivitas</td><td>Histori semua aksi di sistem — siapa melakukan apa dan kapan.</td></tr>
+    <tr><td>👥 Data Siswa</td><td>Lihat daftar seluruh siswa. Admin juga dapat mengedit data siswa.</td></tr>
+    <tr><td>⚙️ Manajemen User</td><td>Reset password, ubah identifier, dan aktifkan/nonaktifkan akun semua user.</td></tr>
+  </table>
+
+  <h2 class="sub">Cara Menambah Akun Staff</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Buka menu Daftar Staff</strong><p>Klik "Daftar Staff" di sidebar kiri.</p></div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Klik tombol "Tambah Guru" atau form tambah</strong>
+        <p>Isi data: Nama, NIP/NUPTK, Email, Nomor Telepon, dan Alamat.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Klik Simpan</strong>
+        <p>Akun otomatis dibuat dengan password default <code>password</code>. Minta staff segera mengubah password via Manajemen User.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h2 class="sub">Cara Reset Password User</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Buka Manajemen User</strong></div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body"><strong>Cari nama pengguna</strong><p>Gunakan kotak pencarian.</p></div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Klik "Reset Password"</strong>
+        <p>Masukkan password baru (minimal 6 karakter), lalu simpan. Informasikan password baru kepada pengguna secara langsung.</p>
+      </div>
+    </li>
+  </ol>
+
+  <div class="warning">
+    <span class="tip-icon">⚠️</span>
+    <div>Admin <strong>tidak dapat</strong> mengubah status akun miliknya sendiri. Ini adalah fitur pengaman untuk mencegah terkuncinya akses sistem.</div>
+  </div>
+</div>
+
+<hr/>
+
+<!-- ══════════════════════════════════════════════════════════
+     4. STAFF KURIKULUM
+═══════════════════════════════════════════════════════════ -->
+<div class="section" id="staff">
+  <div class="section-title">4. Panduan Staff Kurikulum 📋</div>
+  <p class="section-desc">Staff adalah pengatur utama data akademik — mulai dari guru, siswa, kelas, mapel, jadwal, hingga rekap nilai.</p>
+
+  <div class="diagram">
+    <div class="diagram-title">Alur Kerja Staff Kurikulum</div>
+    <div class="mermaid">
+flowchart TD
+    LOGIN([Login Staff]) --> DASH[Dashboard]
+    DASH --> G1[Data Guru]
+    DASH --> G2[Data Siswa]
+    DASH --> G3[Kelas]
+    DASH --> G4[Mata Pelajaran]
+    DASH --> G5[Jadwal Akademik]
+    DASH --> G6[Jadwal Pelajaran]
+    DASH --> G7[Rubrik Mapel]
+    DASH --> G8[Tahun Ajaran]
+    DASH --> G9[Range Nilai]
+    DASH --> G10[Rekap Nilai]
+
+    G1 -->|CRUD| DA[Tambah/Ubah/Hapus Guru]
+    G2 -->|CRUD + Import CSV| DB[Tambah/Ubah/Import Siswa]
+    G3 -->|CRUD| DC[Atur Kelas & Wali Kelas]
+    G4 -->|CRUD| DD[Atur Mapel & Koordinator]
+    G5 --> DE[Jadwal Kegiatan Sekolah]
+    G6 --> DF[Jadwal Per Hari/Waktu/Ruang]
+    G7 --> DG[Lingkup Materi & TP]
+    G10 --> DH[Latihan Soal / Tugas / Sumatif / Ujian / Akhir]
+    </div>
+  </div>
+
+  <h2 class="sub">Urutan Setup Awal Tahun Ajaran</h2>
+  <div class="info">
+    <span class="tip-icon">ℹ️</span>
+    <div>Ikuti urutan ini saat memulai tahun ajaran baru agar data saling terhubung dengan benar.</div>
+  </div>
+
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Buat Tahun Ajaran Baru</strong>
+        <p>Menu: <em>Tahun Ajaran</em> → Tambah Tahun Ajaran. Isi format "2025/2026", tanggal mulai semester Ganjil & Genap, dan centang "Aktif".</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Daftarkan Kelas</strong>
+        <p>Menu: <em>Kelas</em> → Tambah Kelas. Pilih tahun ajaran, jenjang (X/XI/XII), jurusan, nama kelas, ruang, dan wali kelas.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Daftarkan/Perbarui Data Guru</strong>
+        <p>Menu: <em>Data Guru</em>. Tambah guru atau verifikasi data guru lama masih aktif.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Daftarkan/Import Siswa ke Kelas</strong>
+        <p>Menu: <em>Data Siswa</em>. Tambah manual atau Import via CSV. Format CSV: <code>nis, nisn, nama, email, kelas</code>.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <strong>Buat Mata Pelajaran</strong>
+        <p>Menu: <em>Mata Pelajaran</em>. Daftarkan semua mapel beserta jenjang, jurusan, dan koordinator.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">6</div>
+      <div class="step-body">
+        <strong>Buat Jadwal Pelajaran (Kelas-Mapel-Guru)</strong>
+        <p>Menu: <em>Jadwal Pelajaran</em>. Hubungkan kelas + mapel + guru pengampu, isi hari, waktu, dan ruang.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">7</div>
+      <div class="step-body">
+        <strong>Buat Range Nilai Kategori</strong>
+        <p>Menu: <em>Range Nilai</em>. Contoh: 90–100 = Sangat Baik, 80–89 = Baik, dst.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">8</div>
+      <div class="step-body">
+        <strong>Buat Rubrik Mapel</strong>
+        <p>Menu: <em>Rubrik Mapel</em>. Isi lingkup materi dan tujuan pembelajaran (TP) beserta kriteria penilaian.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h2 class="sub">Import Siswa via CSV</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Buka Data Siswa → klik "Impor"</strong></div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Siapkan file CSV</strong>
+        <p>Header wajib: <code>nis, nisn, nama, email, kelas</code>. Header opsional: <code>no_telp, jenis_kelamin, agama, alamat</code>.</p>
+        <div class="screen">
+<span class="label">Contoh isi CSV:</span><br/>
+<span class="val">nis,nisn,nama,email,kelas</span><br/>
+20001,0001234567,Budi Santoso,budi@email.com,X-IPA-1<br/>
+20002,0001234568,Ani Rahayu,ani@email.com,X-IPA-1
+        </div>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body"><strong>Pilih file dan tunggu proses selesai</strong><p>Sistem akan melewati data yang sudah ada (berdasarkan NISN) dan melaporkan jumlah yang berhasil diimpor.</p></div>
+    </li>
+  </ol>
+
+  <h2 class="sub">Melihat Rekap Nilai</h2>
+  <table>
+    <tr><th>Menu Nilai</th><th>Isi</th></tr>
+    <tr><td>Nilai Latihan Soal</td><td>Rekapitulasi nilai ujian bertipe "Latihan Soal"</td></tr>
+    <tr><td>Nilai Tugas</td><td>Nilai dari pengumpulan tugas per kelas-mapel</td></tr>
+    <tr><td>Sumatif LM</td><td>Nilai sumatif per lingkup materi</td></tr>
+    <tr><td>Nilai Ujian Sumatif</td><td>Nilai ujian sumatif tengah/akhir semester</td></tr>
+    <tr><td>Nilai Akhir</td><td>Rekap nilai akhir seluruh komponen per siswa</td></tr>
+  </table>
+</div>
+
+<hr/>
+
+<!-- ══════════════════════════════════════════════════════════
+     5. GURU
+═══════════════════════════════════════════════════════════ -->
+<div class="section" id="guru">
+  <div class="section-title">5. Panduan Guru 👨‍🏫</div>
+  <p class="section-desc">Guru mengelola konten pembelajaran, tugas, ujian, dan penilaian di kelas yang diampu.</p>
+
+  <div class="diagram">
+    <div class="diagram-title">Alur Kerja Guru</div>
+    <div class="mermaid">
+flowchart TD
+    LOGIN([Login Guru]) --> DASH[Dashboard]
+    DASH --> KG[Kelas yang Diampu]
+    DASH --> JG[Jadwal Mengajar]
+    DASH --> RM[Rubrik Mapel]
+    DASH --> NA[Nilai Akhir Kelas]
+
+    KG --> DETAIL[Buka Detail Kelas]
+    DETAIL --> TAB1[Tab Materi]
+    DETAIL --> TAB2[Tab Tugas]
+    DETAIL --> TAB3[Tab Ujian]
+    DETAIL --> TAB4[Tab Daftar Siswa]
+    DETAIL --> TAB5[Tab Kelompok]
+    DETAIL --> TAB6[Tab Rubrik]
+    DETAIL --> TAB7[Tab Nilai]
+
+    TAB1 -->|Upload| M1[Tambah Materi + File]
+    TAB1 -->|Lihat| M2[Komentar Diskusi]
+    TAB2 -->|Buat| T1[Tambah Tugas + Deadline]
+    TAB2 -->|Nilai| T2[Nilai Pengumpulan Siswa]
+    TAB3 -->|Buat| U1[Tambah Soal PG / Esai]
+    TAB3 -->|Nilai| U2[Nilai Jawaban Ujian]
+    </div>
+  </div>
+
+  <h2 class="sub">Mengelola Materi Pembelajaran</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Buka Kelas</strong>
+        <p>Menu <em>Kelas</em> → pilih kartu kelas-mapel yang ingin dikelola → klik <strong>Buka Kelas</strong>.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Tab Materi → Tambah Materi</strong>
+        <p>Isi:</p>
+        <ul>
+          <li><strong>Judul</strong>: nama materi</li>
+          <li><strong>Lingkup Materi</strong>: pilih dari rubrik yang sudah dibuat</li>
+          <li><strong>Status</strong>: <em>Draft</em> (tersembunyi dari siswa) atau <em>Visible</em> (bisa dilihat siswa)</li>
+          <li><strong>Deskripsi</strong>: penjelasan materi</li>
+          <li><strong>File</strong>: upload PDF, Word, PPT, atau gambar (maks 25 MB per file, hingga 10 file)</li>
+        </ul>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Klik Simpan</strong>
+        <p>Materi tersimpan. Ubah status ke <em>Visible</em> saat siap dibagikan ke siswa.</p>
+      </div>
+    </li>
+  </ol>
+
+  <div class="diagram">
+    <div class="diagram-title">Siklus Status Materi / Tugas / Ujian</div>
+    <div class="mermaid">
+stateDiagram-v2
+    [*] --> Draft : Dibuat baru
+    Draft --> Visible : Publikasikan ke siswa
+    Visible --> Hidden : Sembunyikan sementara
+    Hidden --> Visible : Tampilkan kembali
+    Visible --> Draft : Tarik kembali
+    Draft --> [*] : Hapus
+    </div>
+  </div>
+
+  <h2 class="sub">Membuat Tugas</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Tab Tugas → Tambah Tugas</strong></div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Isi detail tugas</strong>
+        <ul>
+          <li><strong>Judul</strong>, <strong>Deskripsi</strong></li>
+          <li><strong>Tujuan Pembelajaran</strong>: pilih TP dari rubrik</li>
+          <li><strong>Deadline</strong>: tanggal & jam pengumpulan</li>
+          <li><strong>Status</strong>: Draft atau Visible</li>
+          <li><strong>File</strong>: lampiran soal tugas (opsional)</li>
+        </ul>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Menilai Pengumpulan</strong>
+        <p>Klik "Pengumpulan (n)" pada kartu tugas. Tampil daftar siswa yang telah mengumpulkan. Isi nilai (0–100) dan feedback, lalu klik <strong>Nilai</strong>.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h2 class="sub">Membuat Ujian</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Tab Ujian → Tambah Ujian</strong></div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Isi info ujian</strong>
+        <ul>
+          <li><strong>Tipe Ujian</strong>: Latihan Soal / Sumatif Lingkup Materi / STS / SAS</li>
+          <li><strong>Tanggal, Jam Mulai, Jam Selesai</strong></li>
+          <li><strong>Status Ujian</strong>: Draft (belum bisa dikerjakan) atau Visible</li>
+        </ul>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Tambah soal</strong>
+        <p>Klik "+ Soal". Pilih tipe:</p>
+        <ul>
+          <li><strong>Pilihan Ganda</strong>: isi pertanyaan, opsi A–D, jawaban benar, bobot</li>
+          <li><strong>Esai</strong>: isi pertanyaan dan bobot</li>
+        </ul>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Menilai jawaban ujian</strong>
+        <p>Klik "Pengerjaan (n)". Pilih siswa → klik <strong>Lihat</strong> → isi nilai per jawaban → Simpan.</p>
+        <div class="tip">
+          <span class="tip-icon">💡</span>
+          <div>Soal Pilihan Ganda dapat dinilai otomatis oleh sistem. Soal Esai perlu dinilai manual oleh guru.</div>
+        </div>
+      </div>
+    </li>
+  </ol>
+
+  <h2 class="sub">Membuat Kelompok Belajar</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Tab Kelompok → Tambah Kelompok</strong></div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Isi nama kelompok dan pilih anggota</strong>
+        <p>Daftar siswa ditampilkan dengan checkbox. Centang nama siswa yang menjadi anggota kelompok.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body"><strong>Simpan</strong><p>Kelompok dapat diubah atau dihapus kapan saja.</p></div>
+    </li>
+  </ol>
+</div>
+
+<hr/>
+
+<!-- ══════════════════════════════════════════════════════════
+     6. SISWA
+═══════════════════════════════════════════════════════════ -->
+<div class="section" id="siswa">
+  <div class="section-title">6. Panduan Siswa 🎓</div>
+  <p class="section-desc">Siswa mengakses materi, mengumpulkan tugas, mengerjakan ujian, dan memantau nilai.</p>
+
+  <div class="diagram">
+    <div class="diagram-title">Alur Kerja Siswa</div>
+    <div class="mermaid">
+flowchart TD
+    LOGIN([Login Siswa]) --> DASH[Dashboard]
+    DASH --> KS[Kelas Saya]
+    DASH --> JS[Jadwal Pelajaran]
+
+    KS --> DETAIL[Buka Detail Kelas]
+    DETAIL --> TAB1[Tab Materi]
+    DETAIL --> TAB2[Tab Tugas]
+    DETAIL --> TAB3[Tab Ujian]
+    DETAIL --> TAB4[Tab Rubrik]
+    DETAIL --> TAB5[Tab Nilai]
+
+    TAB1 -->|Baca| M1[Lihat materi & unduh file]
+    TAB1 -->|Diskusi| M2[Tulis komentar]
+    TAB2 -->|Cek status| T0{Sudah kumpul?}
+    T0 -->|Belum| T1[Kumpulkan file]
+    T0 -->|Sudah| T2[Lihat nilai & feedback]
+    TAB3 -->|Kerjakan| U1[Jawab soal PG / Esai]
+    TAB3 -->|Cek nilai| U2[Lihat hasil ujian]
+    </div>
+  </div>
+
+  <h2 class="sub">Mengakses Materi Pelajaran</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Menu Kelas → Pilih kelas-mapel</strong>
+        <p>Tampil kartu-kartu kelas dengan informasi jumlah materi, tugas, ujian, dan latihan soal.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Klik "Buka Kelas"</strong>
+        <p>Masuk ke halaman detail kelas dengan beberapa tab.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Tab Materi</strong>
+        <p>Lihat semua materi yang sudah dipublikasikan (status <em>Visible</em>). Klik tombol unduh untuk mengambil file lampiran.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Tulis komentar / diskusi</strong>
+        <p>Klik "Komentar (n)" pada kartu materi untuk membaca atau menulis komentar diskusi.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h2 class="sub">Mengumpulkan Tugas</h2>
+
+  <div class="diagram">
+    <div class="diagram-title">Alur Pengumpulan Tugas Siswa</div>
+    <div class="mermaid">
+flowchart LR
+    A[Buka Tab Tugas] --> B{Status Tugas}
+    B -->|Draft| C[Belum terlihat]
+    B -->|Visible| D[Tugas tersedia]
+    D --> E{Sudah mengumpulkan?}
+    E -->|Belum| F[Klik Kumpulkan]
+    F --> G[Pilih file jawaban]
+    G --> H[Klik Kirim]
+    H --> I[Status: Terkirim]
+    I --> J[Tunggu penilaian guru]
+    J --> K[Status: Dinilai]
+    K --> L[Lihat nilai & feedback]
+    E -->|Sudah| M[Klik Ubah Pengumpulan]
+    M --> G
+    </div>
+  </div>
+
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Tab Tugas → Klik "Kumpulkan"</strong></div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Pilih file jawaban</strong>
+        <p>Bisa upload beberapa file sekaligus (PDF, Word, gambar, dll). Pastikan ukuran file tidak melebihi 25 MB per file.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body"><strong>Klik "Kirim"</strong><p>Status berubah menjadi <em>Terkirim</em>. Siswa bisa mengubah pengumpulan sebelum deadline dengan klik "Ubah Pengumpulan".</p></div>
+    </li>
+    <li>
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Lihat hasil penilaian</strong>
+        <p>Setelah guru menilai, tampil badge biru dengan nilai. Klik untuk melihat feedback dari guru.</p>
+      </div>
+    </li>
+  </ol>
+
+  <div class="warning">
+    <span class="tip-icon">⚠️</span>
+    <div>Pastikan mengumpulkan tugas sebelum <strong>deadline</strong>. Pengumpulan setelah deadline tetap bisa dikirim tetapi mungkin akan mempengaruhi penilaian guru.</div>
+  </div>
+
+  <h2 class="sub">Mengerjakan Ujian</h2>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Tab Ujian → Klik "Kerjakan / Lihat Soal"</strong><p>Pastikan ujian dalam status <em>Visible</em>.</p></div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Jawab setiap soal</strong>
+        <ul>
+          <li><strong>Pilihan Ganda</strong>: klik radio button pada pilihan A, B, C, atau D</li>
+          <li><strong>Esai</strong>: ketik jawaban di kotak teks</li>
+        </ul>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Klik "Kirim Jawaban"</strong>
+        <p>Jawaban tidak dapat diubah setelah dikirim. Pastikan semua soal sudah dijawab sebelum mengirim.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Cek nilai</strong>
+        <p>Nilai tampil di kartu ujian setelah guru selesai menilai, atau otomatis untuk soal pilihan ganda.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h2 class="sub">Melihat Jadwal Pelajaran</h2>
+  <p>Menu <em>Jadwal Pelajaran</em> menampilkan jadwal lengkap sesuai kelas siswa, diurutkan dari Senin hingga Sabtu, dengan informasi: mata pelajaran, guru pengampu, ruang kelas, dan waktu.</p>
+</div>
+
+<hr/>
+
+<!-- ══════════════════════════════════════════════════════════
+     7. DIAGRAM ALUR LENGKAP
+═══════════════════════════════════════════════════════════ -->
+<div class="section" id="alur-sistem">
+  <div class="section-title">7. Diagram Alur Sistem Lengkap</div>
+  <p class="section-desc">Gambaran menyeluruh interaksi antar komponen dan peran dalam sistem.</p>
+
+  <h2 class="sub">Alur Proses Pembelajaran (End-to-End)</h2>
+  <div class="diagram">
+    <div class="mermaid">
+sequenceDiagram
+    participant S as Staff
+    participant G as Guru
+    participant SIS as Siswa
+    participant SYS as Sistem
+
+    Note over S,SYS: Setup Awal Tahun Ajaran
+    S->>SYS: Buat Tahun Ajaran & Semester
+    S->>SYS: Buat Kelas & Daftarkan Siswa
+    S->>SYS: Buat Mapel & Jadwal Pelajaran
+    S->>SYS: Buat Rubrik (Lingkup Materi + TP)
+
+    Note over G,SYS: Aktivitas Mengajar
+    G->>SYS: Upload Materi (status Visible)
+    SYS-->>SIS: Materi tersedia di kelas
+    SIS->>SYS: Baca materi & tulis komentar
+    G->>SYS: Buat Tugas + Deadline
+
+    Note over SIS,SYS: Pengumpulan Tugas
+    SIS->>SYS: Upload file jawaban tugas
+    SYS-->>G: Notifikasi ada pengumpulan baru
+    G->>SYS: Nilai pengumpulan (0–100 + feedback)
+    SYS-->>SIS: Nilai & feedback tersedia
+
+    Note over G,SYS: Ujian
+    G->>SYS: Buat soal ujian (PG / Esai)
+    G->>SYS: Set status Ujian = Visible
+    SIS->>SYS: Kerjakan ujian online
+    G->>SYS: Nilai jawaban esai
+    SYS-->>SIS: Nilai ujian tampil di dashboard
+    </div>
+  </div>
+
+  <h2 class="sub">Alur Manajemen Akun & Keamanan</h2>
+  <div class="diagram">
+    <div class="mermaid">
+flowchart TD
+    ADMIN([Admin]) -->|Buat akun| STAFF([Staff])
+    STAFF -->|Buat akun| GURU([Guru])
+    STAFF -->|Buat akun| SISWA([Siswa])
+    ADMIN -->|Reset password| GURU
+    ADMIN -->|Reset password| SISWA
+    ADMIN -->|Reset password| STAFF
+    STAFF -->|Reset password| GURU
+    STAFF -->|Reset password| SISWA
+    ADMIN -->|Nonaktifkan| STAFF
+    ADMIN -->|Nonaktifkan| GURU
+    ADMIN -->|Nonaktifkan| SISWA
+    STAFF -->|Nonaktifkan| GURU
+    STAFF -->|Nonaktifkan| SISWA
+
+    subgraph Hak Akses
+      ADMIN
+      STAFF
+      GURU
+      SISWA
+    end
+    </div>
+  </div>
+
+  <h2 class="sub">Alur Penilaian Komponen Nilai Akhir</h2>
+  <div class="diagram">
+    <div class="mermaid">
+flowchart LR
+    LS[Latihan Soal\n Ujian tipe LS] --> NA
+    TG[Tugas\n Pengumpulan dinilai] --> NA
+    SLM[Sumatif LM\n Ujian per Lingkup Materi] --> NA
+    STS[STS\n Sumatif Tengah Semester] --> NA
+    SAS[SAS\n Sumatif Akhir Semester] --> NA
+    NA[🏆 Nilai Akhir\n Rekap oleh Staff]
+    NA --> RAPORT[📊 Raport / Laporan]
+    </div>
+  </div>
+
+  <h2 class="sub">Diagram Relasi Entitas (ERD Ringkas)</h2>
+  <div class="diagram">
+    <div class="mermaid">
+erDiagram
+    USERS {
+        int id
+        string identifier
+        enum role
+        string nama
+    }
+    ACADEMIC_YEARS {
+        int id
+        string tahunAjaran
+        bool isActive
+    }
+    CLASSES {
+        int id
+        string namaKelas
+        enum jenjang
+        string jurusan
+    }
+    SUBJECTS {
+        int id
+        string judulMapel
+        enum jenjang
+    }
+    CLASS_SUBJECTS {
+        int id
+        int classId
+        int subjectId
+        int guruUserId
+    }
+    MATERIALS {
+        int id
+        string judul
+        enum status
+    }
+    ASSIGNMENTS {
+        int id
+        string judul
+        datetime deadline
+    }
+    EXAMS {
+        int id
+        string judul
+        enum tipeUjian
+    }
+
+    ACADEMIC_YEARS ||--o{ CLASSES : "punya"
+    CLASSES ||--o{ CLASS_SUBJECTS : "terdiri"
+    SUBJECTS ||--o{ CLASS_SUBJECTS : "diajarkan"
+    USERS ||--o{ CLASS_SUBJECTS : "mengampu"
+    CLASS_SUBJECTS ||--o{ MATERIALS : "berisi"
+    CLASS_SUBJECTS ||--o{ ASSIGNMENTS : "berisi"
+    CLASS_SUBJECTS ||--o{ EXAMS : "berisi"
+    </div>
+  </div>
+</div>
+
+<hr/>
+
+<!-- ══════════════════════════════════════════════════════════
+     8. FAQ
+═══════════════════════════════════════════════════════════ -->
+<div class="section" id="faq">
+  <div class="section-title">8. Pertanyaan Umum (FAQ)</div>
+
+  <div class="card">
+    <h3>❓ Saya lupa password, apa yang harus dilakukan?</h3>
+    <p>Gunakan fitur <strong>Lupa Password</strong> di halaman login. Masukkan identifier atau email yang terdaftar. Jika tidak berhasil, hubungi Admin atau Staff untuk reset password manual.</p>
+  </div>
+
+  <div class="card">
+    <h3>❓ Materi tidak muncul di kelas, kenapa?</h3>
+    <p>Materi mungkin masih berstatus <strong>Draft</strong>. Guru perlu mengubah status materi menjadi <strong>Visible</strong> agar dapat dilihat oleh siswa.</p>
+  </div>
+
+  <div class="card">
+    <h3>❓ Saya tidak bisa mengumpulkan tugas, kenapa?</h3>
+    <p>Periksa hal berikut:</p>
+    <ul style="margin-top:8px;padding-left:18px;">
+      <li>Status tugas harus <em>Visible</em> (bukan Draft/Hidden)</li>
+      <li>Format file yang didukung: PDF, DOC/DOCX, JPG, PNG, PPT/PPTX, dll.</li>
+      <li>Ukuran file maksimal 25 MB per file, hingga 10 file</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>❓ Ujian sudah selesai tapi nilai belum muncul</h3>
+    <p>Untuk soal <strong>Pilihan Ganda</strong>, nilai dihitung otomatis. Untuk soal <strong>Esai</strong>, guru perlu menilai secara manual — harap tunggu hingga guru selesai mengoreksi.</p>
+  </div>
+
+  <div class="card">
+    <h3>❓ Siswa tidak muncul di kelas yang dikelola guru</h3>
+    <p>Pastikan data siswa sudah dimasukkan ke kelas yang benar oleh Staff. Cek di <em>Data Siswa</em> → kolom <em>Kelas</em>.</p>
+  </div>
+
+  <div class="card">
+    <h3>❓ Bagaimana cara menambah mata pelajaran baru?</h3>
+    <p>Hanya <span class="badge staff">Staff</span> yang bisa menambah mata pelajaran. Buka <em>Mata Pelajaran</em> → Tambah Mapel → isi judul, jenjang, jurusan, dan koordinator.</p>
+  </div>
+
+  <div class="card">
+    <h3>❓ Apakah siswa bisa mengerjakan ujian lebih dari sekali?</h3>
+    <p>Tergantung pada konfigurasi yang ditetapkan guru. Secara default, jawaban ujian yang sudah dikirim tidak dapat diulang. Hubungi guru jika ada kendala teknis.</p>
+  </div>
+
+  <div class="card">
+    <h3>❓ Siapa yang bisa melihat log aktivitas?</h3>
+    <p>Hanya <span class="badge admin">Admin</span> yang memiliki akses ke menu Log Aktivitas. Semua aksi penting di sistem tercatat otomatis.</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     FOOTER
+═══════════════════════════════════════════════════════════ -->
+<div style="text-align:center;padding:40px 0 20px;color:var(--muted);font-size:13px;border-top:1px solid var(--border);margin-top:40px;">
+  <div style="font-weight:600;color:var(--text);font-size:15px;margin-bottom:6px;">E-Learning SMAN 2 Sidoarjo</div>
+  Panduan Penggunaan — Versi 1.0 · 2025<br/>
+  Untuk bantuan teknis, hubungi admin sistem sekolah.
+</div>
+
+</div><!-- /container -->
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#e0f2fe',
+      primaryTextColor: '#0f172a',
+      primaryBorderColor: '#0369a1',
+      lineColor: '#64748b',
+      secondaryColor: '#f0fdf4',
+      tertiaryColor: '#fef3c7',
+      fontSize: '13px',
+    },
+    flowchart: { curve: 'basis', padding: 20 },
+    sequence: { actorMargin: 60 },
+  });
+</script>
+</body>
+</html>
