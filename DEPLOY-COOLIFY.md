@@ -1,101 +1,117 @@
-# Deployment ke Coolify
+# Deployment ke Coolify (Dockerfile-only)
+
+Deploy memakai **build pack Dockerfile** — tanpa docker-compose. MySQL dipakai
+dari **Managed Database** milik Coolify (resource terpisah).
 
 Aplikasi dikemas sebagai **satu container**: Express melayani REST API (`/api`),
 file upload (`/uploads`), sekaligus hasil build frontend (SPA React). Karena
-frontend dan API satu origin, tidak ada masalah CORS dan `VITE_API_URL` tidak
-perlu di-hardcode ke domain tertentu — cukup path relatif `/api`.
+frontend & API satu origin, tidak perlu CORS dan `VITE_API_URL` cukup path
+relatif `/api`.
 
-Database MySQL berjalan sebagai service terpisah di dalam `docker-compose.yaml`.
+Saat startup, server **otomatis meng-import** `database/elearning_sma.sql`
+(skema + akun demo). File itu idempoten (`CREATE TABLE IF NOT EXISTS` +
+`INSERT IGNORE`), jadi aman dijalankan setiap boot. Jadi Anda **tidak perlu**
+import SQL manual.
 
-## Ringkasan file deployment
+## File deployment
 
 | File | Fungsi |
 |---|---|
-| `Dockerfile` | Multi-stage: build Vite → runtime Node (produksi saja) |
-| `docker-compose.yaml` | Stack `app` + `db` (MySQL), volume, healthcheck, auto-seed |
+| `Dockerfile` | Multi-stage: build Vite → runtime Node produksi + healthcheck |
 | `.dockerignore` | Mengecualikan `flutter/`, `node_modules`, `.env`, dsb. |
 | `.env.production.example` | Daftar environment variable untuk diisi di Coolify |
 
 ---
 
-## Cara deploy (rekomendasi: Docker Compose)
+## Langkah deploy
 
-1. **Push project ke Git** (GitHub/GitLab/Gitea) yang terhubung ke Coolify.
-   Pastikan `.env` **tidak** ikut ter-commit (sudah di `.gitignore`).
+### 1. Push project ke Git
 
-2. Di Coolify: **New Resource → Docker Compose**, arahkan ke repo & branch,
-   set **Compose file** = `docker-compose.yaml`.
+Pastikan `.env` **tidak** ikut ter-commit (sudah di `.gitignore`).
 
-3. Di tab **Environment Variables**, isi minimal berikut (lihat
-   `.env.production.example`):
+### 2. Buat Managed Database (MySQL) di Coolify
 
-   ```
-   JWT_SECRET=<hasil `openssl rand -hex 32`>
-   DB_USER=elearning
-   DB_PASSWORD=<password kuat>
-   DB_ROOT_PASSWORD=<password kuat lain>
-   DB_NAME=elearning_sma
-   ```
+- **New Resource → Database → MySQL** (disarankan MySQL 8).
+- Setelah jalan, catat kredensialnya: **host internal**, port, user, password.
+  Coolify menyediakan hostname internal antar-resource — pakai itu sebagai
+  `DB_HOST` (bukan `localhost`).
+- Pastikan sebuah database bernama `elearning_sma` tersedia (buat lewat UI
+  Coolify bila belum ada). User DB harus punya akses penuh ke database tsb.
 
-4. Pada service **app**, set **Domain** (mis. `https://elearning.sman2sidoarjo.sch.id`)
-   dan **Port** yang di-expose = `4000`. Coolify mengurus HTTPS/Let's Encrypt.
+> Auto-migrate hanya membuat **tabel** di dalam database yang sudah ada; ia tidak
+> menjalankan `CREATE DATABASE` (statement itu sengaja dibuang agar cocok dengan
+> user managed yang berhak terbatas). Jadi database-nya harus sudah ada dulu.
 
-5. Klik **Deploy**. Saat pertama kali, container `db` otomatis meng-import
-   `database/elearning_sma.sql` (skema + akun demo).
+### 3. Buat aplikasi
 
-6. Cek health: `https://<domain>/api/health` → `{"ok":true}`.
+- **New Resource → Application → Dockerfile** (atau pilih repo, lalu set
+  **Build Pack = Dockerfile**).
+- Arahkan ke repo & branch Anda. Dockerfile terdeteksi otomatis di root.
 
----
+### 4. Isi Environment Variables
 
-## Alternatif: Managed Database Coolify
+Di tab **Environment Variables** aplikasi (lihat `.env.production.example`):
 
-Jika ingin memakai database MySQL yang dikelola Coolify (bukan service `db`):
+```
+DB_HOST=<host internal MySQL dari Coolify>
+DB_PORT=3306
+DB_USER=elearning
+DB_PASSWORD=<password DB>
+DB_NAME=elearning_sma
+JWT_SECRET=<hasil `openssl rand -hex 32`>
+```
 
-1. Buat resource **Database → MySQL** di Coolify.
-2. Deploy hanya `app` (pakai build pack **Dockerfile**, bukan compose).
-3. Isi `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` ke kredensial
-   database managed tersebut, dan `HOST=0.0.0.0`, `PORT=4000`.
-4. Import skema sekali secara manual ke database tersebut:
-   ```bash
-   mysql -h <host> -u <user> -p elearning_sma < database/elearning_sma.sql
-   ```
+`NODE_ENV`, `HOST=0.0.0.0`, `PORT=4000`, dan `AUTO_MIGRATE=true` sudah menjadi
+default di Dockerfile — override hanya bila perlu.
 
-> Catatan: `database/elearning_sma.sql` melakukan `CREATE DATABASE elearning_sma`
-> dan `USE elearning_sma`. Pertahankan `DB_NAME=elearning_sma`, atau sesuaikan
-> SQL bila ingin nama lain.
+### 5. Set domain & port
 
----
+- **Port yang di-expose = `4000`**.
+- Set **Domain** aplikasi (mis. `https://elearning.sman2sidoarjo.sch.id`).
+  Coolify mengurus HTTPS/Let's Encrypt otomatis.
 
-## Persistensi data
+### 6. Persistent storage untuk upload
 
-Dua volume didefinisikan agar data tidak hilang saat redeploy:
+File yang diunggah pengguna disimpan di `/app/uploads` dalam container. Tanpa
+volume, file hilang setiap redeploy. Di Coolify → tab **Storages** aplikasi,
+tambahkan **Persistent Storage**:
 
-- `db_data` → `/var/lib/mysql` (data MySQL)
-- `uploads` → `/app/uploads` (file yang diunggah pengguna)
+- Mount path: `/app/uploads`
 
-Import seed `.sql` hanya berjalan **sekali**, yaitu ketika volume `db_data`
-masih kosong. Perubahan skema berikutnya ditangani `ensureSchema()` di server.
+### 7. Deploy & verifikasi
+
+- Klik **Deploy**.
+- Cek health: `https://<domain>/api/health` → `{"ok":true}`.
+- Login dengan akun demo (identifier `1000`, password `password`) untuk
+  memastikan koneksi DB & auto-migrate berhasil.
 
 ---
 
 ## Catatan keamanan (lakukan sebelum go-live)
 
 - **Ganti `JWT_SECRET`** dengan string acak — jangan pakai nilai default.
-- **Ganti semua password DB** dari nilai contoh.
+- **Ganti password DB** dari nilai contoh.
 - **Akun demo memakai password plaintext** (`password`, identifier `1000`/`2000`/
   `3000`/`4000`). Login menerima plaintext untuk akun seed ini dan bcrypt untuk
   akun baru. Untuk produksi: ganti/hapus akun demo dan set password lewat fitur
   aplikasi (tersimpan sebagai bcrypt).
 - Endpoint `forgot-password` mengembalikan OTP di respons dan belum terhubung ke
   email/SMS — hubungkan ke layanan nyata sebelum dipakai publik.
+- Setelah seed pertama sukses, Anda boleh set `AUTO_MIGRATE=false` agar server
+  tidak menjalankan ulang skrip seed di tiap boot.
 
 ---
 
-## Uji lokal sebelum push (opsional)
+## Uji lokal sebelum push (opsional, butuh Docker)
 
 ```bash
-docker compose up --build
+docker build -t elearning-sma .
+docker run --rm -p 4000:4000 \
+  -e DB_HOST=host.docker.internal \
+  -e DB_USER=elearning -e DB_PASSWORD=... -e DB_NAME=elearning_sma \
+  -e JWT_SECRET=uji-lokal \
+  elearning-sma
 ```
 
-Lalu buka `http://localhost:4000`. Hentikan dengan `docker compose down`
-(tambah `-v` untuk menghapus volume/data).
+Lalu buka `http://localhost:4000` (perlu MySQL yang bisa dijangkau dari
+container, mis. MySQL lokal via `host.docker.internal`).

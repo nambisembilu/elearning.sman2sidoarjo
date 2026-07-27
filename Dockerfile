@@ -17,14 +17,20 @@ RUN npm run build
 # ---------- Stage 2: runtime (Express + hasil build) ----------
 FROM node:22-alpine AS runtime
 WORKDIR /app
-ENV NODE_ENV=production
+
+# Default aman untuk container: bind ke semua interface, port 4000.
+# Semua nilai ini bisa di-override lewat Environment Variables di Coolify.
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=4000
 
 # Hanya dependency produksi.
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Kode server + hasil build frontend.
+# Kode server + skema DB (untuk auto-migrate) + hasil build frontend.
 COPY server ./server
+COPY database ./database
 COPY --from=build /app/dist ./dist
 
 # Direktori upload (di-mount sebagai volume persisten di produksi).

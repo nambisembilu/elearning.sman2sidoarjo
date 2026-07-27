@@ -2458,9 +2458,46 @@ async function ensureSchema() {
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 }
 
+// Import skema + seed dari database/elearning_sma.sql saat startup.
+// File ini idempoten (CREATE TABLE IF NOT EXISTS + INSERT IGNORE), jadi aman
+// dijalankan tiap boot. Cocok untuk deploy Dockerfile-only + managed database:
+// database sudah dibuat oleh penyedia, jadi statement CREATE DATABASE / USE
+// (butuh hak server-level) dibuang agar tidak "Access denied" pada user terbatas.
+// Nonaktifkan dengan AUTO_MIGRATE=false bila skema dikelola manual.
+async function autoMigrate() {
+  if (process.env.AUTO_MIGRATE === "false") return;
+  const sqlPath = path.join(rootDir, "database", "elearning_sma.sql");
+  if (!fs.existsSync(sqlPath)) {
+    console.warn("AUTO_MIGRATE dilewati: database/elearning_sma.sql tidak ditemukan.");
+    return;
+  }
+  const sql = fs
+    .readFileSync(sqlPath, "utf8")
+    .replace(/CREATE\s+DATABASE[\s\S]*?;/i, "")
+    .replace(/USE\s+`?[\w-]+`?\s*;/i, "")
+    .trim();
+  if (!sql) return;
+
+  const conn = await mysql.createConnection({
+    host: process.env.DB_HOST || "127.0.0.1",
+    port: Number(process.env.DB_PORT || 3306),
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD || "",
+    database: process.env.DB_NAME || "elearning_sma",
+    multipleStatements: true,
+  });
+  try {
+    await conn.query(sql);
+    console.log("AUTO_MIGRATE: skema & seed database dipastikan ada.");
+  } finally {
+    await conn.end();
+  }
+}
+
 const host = process.env.HOST || "127.0.0.1";
 
-ensureSchema()
+autoMigrate()
+  .then(() => ensureSchema())
   .then(() => {
     app.listen(port, host, () => {
       console.log(`E-learning SMA API running on http://${host}:${port}`);
