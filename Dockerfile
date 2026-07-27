@@ -8,8 +8,12 @@ WORKDIR /app
 ARG VITE_API_URL=/api
 ENV VITE_API_URL=$VITE_API_URL
 
+# NODE_ENV=development memastikan devDependencies (tailwindcss, vite, postcss)
+# tetap terpasang meski Coolify menyuntikkan NODE_ENV=production ke build.
+ENV NODE_ENV=development
+
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 COPY . .
 RUN npm run build
