@@ -4394,8 +4394,11 @@ function StaffCurriculumPage() {
   );
 }
 
+const roleTones = { admin: "danger", staff: "warning", guru: "default", siswa: "muted" };
+
 function UserManagementPage() {
   const { user: currentUser } = useAuth();
+  const { options } = useOptions();
   const { show, node } = useToast();
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState({ total: 0, totalPage: 1, page: 1 });
@@ -4415,6 +4418,12 @@ function UserManagementPage() {
   const [idDialog, setIdDialog] = useState(null);
   const [newIdentifier, setNewIdentifier] = useState("");
   const [idLoading, setIdLoading] = useState(false);
+
+  // Role change dialog (admin only)
+  const [roleDialog, setRoleDialog] = useState(null);
+  const [newRole, setNewRole] = useState("");
+  const [roleForm, setRoleForm] = useState({ nipNuptk: "", nis: "", nisn: "", kelasId: "" });
+  const [roleLoading, setRoleLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -4497,6 +4506,57 @@ function UserManagementPage() {
     }
   };
 
+  const openRoleDialog = (user) => {
+    setRoleDialog(user);
+    setNewRole(user.role);
+    setRoleForm({ nipNuptk: "", nis: "", nisn: "", kelasId: "" });
+  };
+
+  const closeRoleDialog = () => {
+    setRoleDialog(null);
+    setNewRole("");
+    setRoleForm({ nipNuptk: "", nis: "", nisn: "", kelasId: "" });
+  };
+
+  // Profil guru/siswa hanya diminta saat user belum pernah punya profil tersebut
+  const needsGuruProfile = newRole === "guru" && !roleDialog?.hasGuruProfile;
+  const needsSiswaProfile = newRole === "siswa" && !roleDialog?.hasSiswaProfile;
+
+  const changeRole = async () => {
+    if (!newRole || newRole === roleDialog.role) {
+      show("Pilih role yang berbeda dari role saat ini", "error");
+      return;
+    }
+    if (needsGuruProfile && !roleForm.nipNuptk.trim()) {
+      show("NIP/NUPTK wajib diisi untuk role guru", "error");
+      return;
+    }
+    if (needsSiswaProfile && (!roleForm.nis.trim() || !roleForm.nisn.trim())) {
+      show("NIS dan NISN wajib diisi untuk role siswa", "error");
+      return;
+    }
+    setRoleLoading(true);
+    try {
+      await apiFetch(`/users/${roleDialog.id}/role`, {
+        method: "PUT",
+        body: {
+          role: newRole,
+          ...(needsGuruProfile ? { nipNuptk: roleForm.nipNuptk.trim() } : {}),
+          ...(needsSiswaProfile
+            ? { nis: roleForm.nis.trim(), nisn: roleForm.nisn.trim(), kelasId: roleForm.kelasId || null }
+            : {}),
+        },
+      });
+      show(`Role ${roleDialog.nama} berhasil diubah menjadi ${roleLabels[newRole] || newRole}`);
+      closeRoleDialog();
+      await load();
+    } catch (error) {
+      show(error.message, "error");
+    } finally {
+      setRoleLoading(false);
+    }
+  };
+
   const toggleStatus = async (user) => {
     const action = user.isActive ? "nonaktifkan" : "aktifkan";
     if (!confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} akun ${user.nama}?`))
@@ -4544,15 +4604,11 @@ function UserManagementPage() {
     {
       key: "role",
       header: "Role",
-      render: (row) => {
-        const toneMap = { admin: "danger", staff: "warning", guru: "default", siswa: "muted" };
-        const labelMap = { admin: "Admin", staff: "Staff", guru: "Guru", siswa: "Siswa" };
-        return (
-          <Badge tone={toneMap[row.role] || "muted"}>
-            {labelMap[row.role] || row.role}
-          </Badge>
-        );
-      },
+      render: (row) => (
+        <Badge tone={roleTones[row.role] || "muted"}>
+          {row.role === "staff" ? "Staff" : roleLabels[row.role] || row.role}
+        </Badge>
+      ),
     },
     { key: "email", header: "Email" },
     {
@@ -4591,6 +4647,21 @@ function UserManagementPage() {
           >
             <Key className="h-3.5 w-3.5" />
           </Button>
+          {currentUser?.role === "admin" && (
+            <Button
+              variant="outline"
+              size="sm"
+              title={
+                row.id === currentUser?.id
+                  ? "Tidak dapat mengubah role akun sendiri"
+                  : "Ubah role"
+              }
+              disabled={row.id === currentUser?.id}
+              onClick={() => openRoleDialog(row)}
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+            </Button>
+          )}
           <Button
             variant={row.isActive ? "destructive" : "outline"}
             size="sm"
@@ -4743,6 +4814,103 @@ function UserManagementPage() {
               autoFocus
             />
           </Field>
+        </div>
+      </Dialog>
+
+      {/* Role Change Dialog — admin only */}
+      <Dialog
+        open={Boolean(roleDialog)}
+        title={`Ubah Role — ${roleDialog?.nama || ""}`}
+        description="Role menentukan menu dan hak akses user setelah login."
+        onClose={closeRoleDialog}
+        footer={
+          <>
+            <Button variant="outline" onClick={closeRoleDialog}>
+              Batal
+            </Button>
+            <Button
+              onClick={changeRole}
+              disabled={roleLoading || !newRole || newRole === roleDialog?.role}
+            >
+              <ShieldCheck className="h-4 w-4" />
+              {roleLoading ? "Menyimpan..." : "Simpan Role"}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+            <span className="text-muted-foreground">Role saat ini: </span>
+            <Badge tone={roleTones[roleDialog?.role] || "muted"}>
+              {roleLabels[roleDialog?.role] || roleDialog?.role}
+            </Badge>
+          </div>
+          <Field label="Role Baru">
+            <SearchableSelect
+              value={newRole}
+              onChange={setNewRole}
+              options={Object.entries(roleLabels).map(([value, label]) => ({ value, label }))}
+              allowEmpty={false}
+              placeholder="Pilih role"
+            />
+          </Field>
+
+          {needsGuruProfile && (
+            <Field label="NIP / NUPTK">
+              <Input
+                value={roleForm.nipNuptk}
+                onChange={(e) => setRoleForm({ ...roleForm, nipNuptk: e.target.value })}
+                placeholder="Wajib diisi — user belum punya profil guru"
+              />
+            </Field>
+          )}
+
+          {needsSiswaProfile && (
+            <>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="NIS">
+                  <Input
+                    value={roleForm.nis}
+                    onChange={(e) => setRoleForm({ ...roleForm, nis: e.target.value })}
+                    placeholder="Wajib diisi"
+                  />
+                </Field>
+                <Field label="NISN">
+                  <Input
+                    value={roleForm.nisn}
+                    onChange={(e) => setRoleForm({ ...roleForm, nisn: e.target.value })}
+                    placeholder="Wajib diisi"
+                  />
+                </Field>
+              </div>
+              <Field label="Kelas (opsional)">
+                <SearchableSelect
+                  value={roleForm.kelasId}
+                  onChange={(v) => setRoleForm({ ...roleForm, kelasId: v })}
+                  options={(options.classes || []).map((c) => ({
+                    value: String(c.id),
+                    label: c.namaKelas,
+                  }))}
+                  placeholder="Belum ditentukan"
+                />
+              </Field>
+            </>
+          )}
+
+          <div className="space-y-1 rounded-lg border bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+            <p>
+              Identifier login <strong>tidak ikut berubah</strong> — ubah lewat tombol{" "}
+              <em>Ubah identifier</em> bila perlu.
+            </p>
+            <p>
+              Guru yang masih menjadi wali kelas atau pengajar kelas-mapel harus
+              dialihkan penugasannya terlebih dahulu.
+            </p>
+            <p>
+              Siswa yang pindah role akan <strong>dilepas dari kelasnya</strong>; data
+              NIS/NISN tetap tersimpan bila suatu saat dikembalikan menjadi siswa.
+            </p>
+          </div>
         </div>
       </Dialog>
     </div>

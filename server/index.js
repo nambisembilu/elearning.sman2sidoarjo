@@ -378,7 +378,9 @@ app.get("/api/users", auth, requireRole("admin", "staff"), asyncHandler(async (r
     req,
     `SELECT u.id, u.identifier, u.nama, u.email, u.role,
             u.no_telp AS noTelp, u.created_at AS createdAt,
-            CASE WHEN u.deleted_at IS NULL THEN 1 ELSE 0 END AS isActive
+            CASE WHEN u.deleted_at IS NULL THEN 1 ELSE 0 END AS isActive,
+            EXISTS(SELECT 1 FROM guru_profiles gp WHERE gp.user_id = u.id) AS hasGuruProfile,
+            EXISTS(SELECT 1 FROM siswa_profiles sp WHERE sp.user_id = u.id) AS hasSiswaProfile
      FROM users u
      WHERE ${where}
      ORDER BY FIELD(u.role,'admin','staff','guru','siswa'), u.nama`,
@@ -440,6 +442,109 @@ app.put("/api/users/:id/status", auth, requireRole("admin", "staff"), asyncHandl
   await q("UPDATE users SET deleted_at = ? WHERE id = ?", [willActivate ? null : new Date(), req.params.id]);
   await logActivity(req.user.id, willActivate ? "Aktifkan user" : "Nonaktifkan user", "users", req.params.id, user.nama);
   res.json({ ok: true, isActive: willActivate });
+}));
+
+// Ubah role user — hanya admin. Perpindahan role menyentuh tabel profil
+// (guru_profiles / siswa_profiles), jadi divalidasi ketat sebelum dieksekusi.
+app.put("/api/users/:id/role", auth, requireRole("admin"), asyncHandler(async (req, res) => {
+  const targetId = Number(req.params.id);
+  const role = String(req.body.role || "").trim();
+  const VALID_ROLES = ["admin", "staff", "guru", "siswa"];
+
+  if (targetId === req.user.id) {
+    return res.status(400).json({ message: "Tidak dapat mengubah role akun sendiri" });
+  }
+  if (!VALID_ROLES.includes(role)) {
+    return res.status(400).json({ message: "Role tidak valid" });
+  }
+
+  const user = await one("SELECT id, nama, role FROM users WHERE id = ?", [targetId]);
+  if (!user) return res.status(404).json({ message: "User tidak ditemukan" });
+  if (user.role === role) {
+    return res.status(400).json({ message: "User sudah memiliki role tersebut" });
+  }
+
+  // Guru yang masih punya penugasan harus dilepas dulu agar data tidak menggantung
+  if (user.role === "guru") {
+    const usage = await one(
+      `SELECT
+         (SELECT COUNT(*) FROM classes WHERE wali_kelas_user_id = ? AND deleted_at IS NULL) AS wali,
+         (SELECT COUNT(*) FROM class_subjects WHERE guru_user_id = ?) AS mengajar`,
+      [targetId, targetId]
+    );
+    const blockers = [];
+    if (usage.wali) blockers.push(`wali kelas pada ${usage.wali} kelas`);
+    if (usage.mengajar) blockers.push(`pengajar pada ${usage.mengajar} kelas-mapel`);
+    if (blockers.length) {
+      return res.status(409).json({
+        message: `Role tidak dapat diubah: user masih terdaftar sebagai ${blockers.join(" dan ")}. Alihkan penugasan tersebut terlebih dahulu.`,
+      });
+    }
+  }
+
+  // Role tujuan butuh profil — kalau belum ada, data pendukung wajib dikirim
+  let newProfile = null;
+  if (role === "guru") {
+    const existing = await one("SELECT user_id FROM guru_profiles WHERE user_id = ?", [targetId]);
+    if (!existing) {
+      const nipNuptk = String(req.body.nipNuptk || "").trim();
+      if (!nipNuptk) {
+        return res.status(400).json({ message: "NIP/NUPTK wajib diisi untuk role guru", need: "nipNuptk" });
+      }
+      const dup = await one("SELECT user_id FROM guru_profiles WHERE nip_nuptk = ?", [nipNuptk]);
+      if (dup) return res.status(409).json({ message: "NIP/NUPTK sudah digunakan guru lain" });
+      newProfile = { type: "guru", nipNuptk };
+    }
+  }
+  if (role === "siswa") {
+    const existing = await one("SELECT user_id FROM siswa_profiles WHERE user_id = ?", [targetId]);
+    if (!existing) {
+      const nis = String(req.body.nis || "").trim();
+      const nisn = String(req.body.nisn || "").trim();
+      if (!nis || !nisn) {
+        return res.status(400).json({ message: "NIS dan NISN wajib diisi untuk role siswa", need: "nisNisn" });
+      }
+      const dup = await one(
+        "SELECT user_id FROM siswa_profiles WHERE nis = ? OR nisn = ?",
+        [nis, nisn]
+      );
+      if (dup) return res.status(409).json({ message: "NIS atau NISN sudah digunakan siswa lain" });
+      newProfile = { type: "siswa", nis, nisn, kelasId: numberOrNull(req.body.kelasId) };
+    }
+  }
+
+  await tx(async (connection) => {
+    await connection.execute("UPDATE users SET role = ? WHERE id = ?", [role, targetId]);
+    if (newProfile?.type === "guru") {
+      await connection.execute(
+        "INSERT INTO guru_profiles (user_id, nip_nuptk) VALUES (?, ?)",
+        [targetId, newProfile.nipNuptk]
+      );
+    }
+    if (newProfile?.type === "siswa") {
+      await connection.execute(
+        "INSERT INTO siswa_profiles (user_id, nis, nisn, kelas_id) VALUES (?, ?, ?, ?)",
+        [targetId, newProfile.nis, newProfile.nisn, newProfile.kelasId]
+      );
+    }
+    // Profil lama disimpan (riwayat tetap utuh), tapi keterkaitannya dilepas
+    // supaya user tidak ikut terhitung di rombel / daftar guru role lain.
+    if (user.role === "siswa") {
+      await connection.execute("UPDATE siswa_profiles SET kelas_id = NULL WHERE user_id = ?", [targetId]);
+    }
+    if (user.role === "guru") {
+      await connection.execute("DELETE FROM guru_subjects WHERE guru_user_id = ?", [targetId]);
+    }
+  });
+
+  await logActivity(
+    req.user.id,
+    "Ubah role user",
+    "users",
+    targetId,
+    `${user.nama}: ${user.role} → ${role}`
+  );
+  res.json({ ok: true, role });
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
