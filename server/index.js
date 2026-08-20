@@ -75,7 +75,12 @@ app.use(
         callback(null, true);
         return;
       }
-      callback(new Error(`Origin tidak diizinkan CORS: ${origin}`));
+      // Tolak TANPA melempar error: jangan set header CORS (browser memblokir
+      // request lintas-origin), tapi request tetap diproses normal sehingga
+      // origin asing tidak menyebabkan 500 yang merusak seluruh respons —
+      // termasuk aset same-origin yang di-fetch mode CORS oleh <script module>.
+      console.warn(`CORS: origin tidak diizinkan -> ${origin}`);
+      callback(null, false);
     },
     credentials: true,
   })
@@ -454,18 +459,24 @@ app.get("/api/options", auth, asyncHandler(async (req, res) => {
     q("SELECT u.id, u.nama, gp.nip_nuptk AS nipNuptk FROM users u JOIN guru_profiles gp ON gp.user_id = u.id WHERE u.role = 'guru' AND u.deleted_at IS NULL ORDER BY u.nama"),
     q("SELECT u.id, u.nama, sp.nis, sp.nisn, sp.kelas_id AS kelasId FROM users u JOIN siswa_profiles sp ON sp.user_id = u.id WHERE u.role = 'siswa' AND u.deleted_at IS NULL ORDER BY u.nama"),
     req.user.role === "guru"
-      ? q(`SELECT cs.id, c.nama_kelas AS namaKelas, s.judul_mapel AS judulMapel, u.nama AS guruPengampu, s.id AS subjectId
+      ? q(`SELECT cs.id, cs.class_id AS classId, cs.subject_id AS subjectId,
+                  cs.academic_year_id AS academicYearId, ay.tahun_ajaran AS tahunAjaran,
+                  c.nama_kelas AS namaKelas, s.judul_mapel AS judulMapel, u.nama AS guruPengampu
            FROM class_subjects cs
            JOIN classes c ON c.id = cs.class_id
            JOIN subjects s ON s.id = cs.subject_id
            JOIN users u ON u.id = cs.guru_user_id
+           JOIN academic_years ay ON ay.id = cs.academic_year_id
            WHERE cs.guru_user_id = ?
            ORDER BY c.nama_kelas, s.judul_mapel`, [req.user.id])
-      : q(`SELECT cs.id, c.nama_kelas AS namaKelas, s.judul_mapel AS judulMapel, u.nama AS guruPengampu, s.id AS subjectId
+      : q(`SELECT cs.id, cs.class_id AS classId, cs.subject_id AS subjectId,
+                  cs.academic_year_id AS academicYearId, ay.tahun_ajaran AS tahunAjaran,
+                  c.nama_kelas AS namaKelas, s.judul_mapel AS judulMapel, u.nama AS guruPengampu
            FROM class_subjects cs
            JOIN classes c ON c.id = cs.class_id
            JOIN subjects s ON s.id = cs.subject_id
            JOIN users u ON u.id = cs.guru_user_id
+           JOIN academic_years ay ON ay.id = cs.academic_year_id
            ORDER BY c.nama_kelas, s.judul_mapel`),
     q("SELECT u.id, u.nama FROM users u WHERE u.role IN ('guru', 'staff') AND u.deleted_at IS NULL ORDER BY u.nama"),
   ]);
@@ -1909,20 +1920,35 @@ app.delete("/api/groups/:id", auth, requireRole("admin", "staff", "guru"), async
 }));
 
 app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler(async (req, res) => {
-  const { classSubjectId } = req.query;
+  const { classSubjectId, semesterId } = req.query;
   const type = req.query.type || "final";
 
   if (!classSubjectId) {
     return res.status(400).json({ message: "classSubjectId diperlukan" });
   }
 
-  // Guru hanya boleh lihat kelasnya sendiri
-  if (req.user.role === "guru") {
-    const cs = await one(
-      "SELECT id FROM class_subjects WHERE id = ? AND guru_user_id = ?",
-      [classSubjectId, req.user.id]
+  const classSubject = await one(
+    "SELECT id, guru_user_id AS guruUserId, academic_year_id AS academicYearId FROM class_subjects WHERE id = ?",
+    [classSubjectId]
+  );
+  if (!classSubject) {
+    return res.status(404).json({ message: "Kelas mata pelajaran tidak ditemukan" });
+  }
+
+  // Guru hanya boleh lihat kelas yang diampunya sendiri.
+  if (req.user.role === "guru" && Number(classSubject.guruUserId) !== Number(req.user.id)) {
+    return res.status(403).json({ message: "Akses tidak diizinkan untuk kelas ini" });
+  }
+
+  // Semester harus berasal dari tahun ajaran kelas yang dipilih.
+  if (semesterId) {
+    const semester = await one(
+      "SELECT id FROM semesters WHERE id = ? AND academic_year_id = ?",
+      [semesterId, classSubject.academicYearId]
     );
-    if (!cs) return res.status(403).json({ message: "Akses tidak diizinkan untuk kelas ini" });
+    if (!semester) {
+      return res.status(400).json({ message: "Semester tidak sesuai dengan tahun ajaran kelas" });
+    }
   }
 
   // Ambil siswa sekali
@@ -1939,15 +1965,31 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
   if (!students.length) return res.json({ data: [], total: 0 });
 
   // Ambil semua tugas sekali
+  const assignmentParams = [classSubjectId];
+  const assignmentSemesterFilter = semesterId ? "AND rs.semester_id = ?" : "";
+  if (semesterId) assignmentParams.push(semesterId);
   const allAssignments = await q(
-    `SELECT id, judul FROM assignments WHERE class_subject_id = ? AND deleted_at IS NULL ORDER BY created_at`,
-    [classSubjectId]
+    `SELECT a.id, a.judul
+     FROM assignments a
+     LEFT JOIN learning_objectives lo ON lo.id = a.learning_objective_id
+     LEFT JOIN rubric_scopes rs ON rs.id = lo.rubric_scope_id
+     WHERE a.class_subject_id = ? AND a.deleted_at IS NULL ${assignmentSemesterFilter}
+     ORDER BY a.created_at`,
+    assignmentParams
   );
 
   // Ambil semua ujian sekali (dengan tipe)
+  const examParams = [classSubjectId];
+  const examSemesterFilter = semesterId ? "AND rs.semester_id = ?" : "";
+  if (semesterId) examParams.push(semesterId);
   const allExams = await q(
-    `SELECT id, judul, tipe_ujian AS tipeUjian FROM exams WHERE class_subject_id = ? AND deleted_at IS NULL ORDER BY tanggal_ujian`,
-    [classSubjectId]
+    `SELECT e.id, e.judul, e.tipe_ujian AS tipeUjian
+     FROM exams e
+     LEFT JOIN learning_objectives lo ON lo.id = e.learning_objective_id
+     LEFT JOIN rubric_scopes rs ON rs.id = lo.rubric_scope_id
+     WHERE e.class_subject_id = ? AND e.deleted_at IS NULL ${examSemesterFilter}
+     ORDER BY e.tanggal_ujian`,
+    examParams
   );
 
   // Filter ujian sesuai type

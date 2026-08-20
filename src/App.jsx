@@ -131,6 +131,10 @@ const menuByRole = {
     ["Jadwal Mengajar", CalendarDays, "/main/jadwalMengajar"],
     ["Rubrik Mapel", Layers3, "/main/rubrikMapelKelas"],
     ["Pengumuman", Megaphone, "/main/pengumumanGuru"],
+    ["Nilai Latihan Soal", ClipboardList, "/main/nilaiLatsol"],
+    ["Nilai Tugas", ClipboardList, "/main/nilaiTugas"],
+    ["Sumatif LM", ClipboardList, "/main/sumatifLingkupMateri"],
+    ["Nilai Ujian Sumatif", ClipboardList, "/main/nilaiUjianSumatif"],
     ["Nilai Akhir", GraduationCap, "/main/nilaiAkhirKelas"],
   ],
   siswa: [
@@ -3921,10 +3925,14 @@ const gradeTypeMeta = {
 };
 
 function GradesPage({ classSubjectId, compact = false, type = "final" }) {
+  const { user } = useAuth();
   const { options } = useOptions();
   const { show, node: toastNode } = useToast();
   const [selected, setSelected] = useState(classSubjectId || "");
   const [gradeType, setGradeType] = useState(type);
+  const [selectedClassId, setSelectedClassId] = useState("");
+  const [selectedSubjectId, setSelectedSubjectId] = useState("");
+  const [selectedSemesterId, setSelectedSemesterId] = useState("");
   const [allRows, setAllRows] = useState(null);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -3940,9 +3948,11 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
     if (!selected) { setAllRows([]); return; }
     setLoading(true);
     try {
-      const data = await apiFetch(
-        withQuery("/grades", { classSubjectId: selected, type: gradeType }),
-      );
+      const data = await apiFetch(withQuery("/grades", {
+        classSubjectId: selected,
+        type: gradeType,
+        semesterId: user?.role === "guru" && !classSubjectId ? selectedSemesterId : "",
+      }));
       setAllRows(data.data || []);
       setPage(1);
     } catch (err) {
@@ -3951,12 +3961,109 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
     } finally {
       setLoading(false);
     }
-  }, [selected, gradeType]);
+  }, [classSubjectId, selected, gradeType, selectedSemesterId, user?.role]);
 
   useEffect(() => { load(); }, [load]);
 
   const gradeTypeOpts = Object.entries(gradeTypeMeta).map(([value, { label }]) => ({ value, label }));
   const meta = gradeTypeMeta[gradeType] || gradeTypeMeta.final;
+  const isGuru = user?.role === "guru";
+
+  const academicYearById = useMemo(
+    () => new Map((options.academicYears || []).map((year) => [String(year.id), year])),
+    [options.academicYears],
+  );
+
+  const teacherAcademicYearIds = useMemo(
+    () => new Set((options.classSubjects || []).map((item) => String(item.academicYearId))),
+    [options.classSubjects],
+  );
+
+  const semesterOptions = useMemo(
+    () => (options.semesters || [])
+      .filter((semester) => !isGuru || teacherAcademicYearIds.has(String(semester.academicYearId)))
+      .map((semester) => {
+        const year = academicYearById.get(String(semester.academicYearId));
+        return {
+          value: String(semester.id),
+          label: `${semester.judulSemester} / ${year?.tahunAjaran || "Tahun ajaran tidak tersedia"}`,
+        };
+      }),
+    [academicYearById, isGuru, options.semesters, teacherAcademicYearIds],
+  );
+
+  const selectedSemester = (options.semesters || []).find(
+    (semester) => String(semester.id) === String(selectedSemesterId),
+  );
+  const selectedAcademicYearId = selectedSemester?.academicYearId;
+
+  const teacherClassSubjects = useMemo(
+    () => (options.classSubjects || []).filter(
+      (item) => !selectedAcademicYearId
+        || String(item.academicYearId) === String(selectedAcademicYearId),
+    ),
+    [options.classSubjects, selectedAcademicYearId],
+  );
+
+  const teacherClassOptions = useMemo(() => {
+    const unique = new Map();
+    teacherClassSubjects.forEach((item) => {
+      unique.set(String(item.classId), {
+        value: String(item.classId),
+        label: item.namaKelas,
+      });
+    });
+    return Array.from(unique.values());
+  }, [teacherClassSubjects]);
+
+  const teacherSubjectOptions = useMemo(() => {
+    const unique = new Map();
+    teacherClassSubjects
+      .filter((item) => !selectedClassId || String(item.classId) === String(selectedClassId))
+      .forEach((item) => {
+        unique.set(String(item.subjectId), {
+          value: String(item.subjectId),
+          label: item.judulMapel,
+        });
+      });
+    return Array.from(unique.values());
+  }, [teacherClassSubjects, selectedClassId]);
+
+  useEffect(() => {
+    if (!isGuru || classSubjectId || selectedSemesterId || !semesterOptions.length) return;
+    const activeSemester = options.semesters.find(
+      (semester) => Number(semester.isActive)
+        && teacherAcademicYearIds.has(String(semester.academicYearId)),
+    );
+    setSelectedSemesterId(String(activeSemester?.id || semesterOptions[0].value));
+  }, [
+    classSubjectId,
+    isGuru,
+    options.semesters,
+    selectedSemesterId,
+    semesterOptions,
+    teacherAcademicYearIds,
+  ]);
+
+  useEffect(() => {
+    if (!isGuru || classSubjectId) return;
+    if (!selectedClassId || !selectedSubjectId || !selectedSemesterId) {
+      setSelected("");
+      return;
+    }
+    const match = teacherClassSubjects.find(
+      (item) => String(item.classId) === String(selectedClassId)
+        && String(item.subjectId) === String(selectedSubjectId),
+    );
+    setSelected(match ? String(match.id) : "");
+  }, [
+    classSubjectId,
+    isGuru,
+    selectedClassId,
+    selectedSemesterId,
+    selectedSubjectId,
+    teacherClassSubjects,
+  ]);
 
   const total = allRows?.length ?? 0;
   const totalPages = Math.ceil(total / pageSize) || 1;
@@ -4076,26 +4183,71 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
         <PageHeader title={meta.label} description={meta.desc} />
       ) : null}
 
-      <div className={`mb-4 grid gap-3 ${needsClassSelect ? "md:grid-cols-2" : "md:grid-cols-1 max-w-xs"}`}>
-        {needsClassSelect ? (
-
-          <SearchableSelect
-            value={String(selected)}
-            onChange={(v) => { setSelected(v); setPage(1); }}
-            options={optionMappers.classSubjects(options).map((item) => ({
-              value: String(item.value),
-              label: item.label,
-            }))}
-            placeholder="Pilih kelas mapel..."
-          />
-        ) : null}
-        <SearchableSelect
-          value={gradeType}
-          onChange={(v) => { setGradeType(v); setPage(1); }}
-          options={gradeTypeOpts}
-          allowEmpty={false}
-        />
-      </div>
+      {isGuru && needsClassSelect ? (
+        <div className="mb-4 grid gap-3 md:grid-cols-3">
+          <Field label="Kelas">
+            <SearchableSelect
+              value={selectedClassId}
+              onChange={(value) => {
+                setSelected("");
+                setSelectedClassId(value);
+                setSelectedSubjectId("");
+                setPage(1);
+              }}
+              options={teacherClassOptions}
+              placeholder="Pilih kelas..."
+            />
+          </Field>
+          <Field label="Mata Pelajaran">
+            <SearchableSelect
+              value={selectedSubjectId}
+              onChange={(value) => {
+                setSelected("");
+                setSelectedSubjectId(value);
+                setPage(1);
+              }}
+              options={teacherSubjectOptions}
+              placeholder="Pilih mata pelajaran..."
+            />
+          </Field>
+          <Field label="Semester / Tahun Ajaran">
+            <SearchableSelect
+              value={selectedSemesterId}
+              onChange={(value) => {
+                setSelected("");
+                setSelectedSemesterId(value);
+                setSelectedClassId("");
+                setSelectedSubjectId("");
+                setPage(1);
+              }}
+              options={semesterOptions}
+              placeholder="Pilih semester / tahun ajaran..."
+            />
+          </Field>
+        </div>
+      ) : (
+        <div className={`mb-4 grid gap-3 ${needsClassSelect ? "md:grid-cols-2" : "max-w-xs md:grid-cols-1"}`}>
+          {needsClassSelect ? (
+            <SearchableSelect
+              value={String(selected)}
+              onChange={(v) => { setSelected(v); setPage(1); }}
+              options={optionMappers.classSubjects(options).map((item) => ({
+                value: String(item.value),
+                label: item.label,
+              }))}
+              placeholder="Pilih kelas mapel..."
+            />
+          ) : null}
+          {!isGuru || classSubjectId ? (
+            <SearchableSelect
+              value={gradeType}
+              onChange={(v) => { setGradeType(v); setPage(1); }}
+              options={gradeTypeOpts}
+              allowEmpty={false}
+            />
+          ) : null}
+        </div>
+      )}
 
       {selected && !isFinal && allRows !== null && (
         <div className="mb-3 flex items-center gap-2 rounded-lg border bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
@@ -4106,7 +4258,9 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
 
       {!selected ? (
         <div className="flex min-h-48 items-center justify-center rounded-xl border bg-card text-sm text-muted-foreground">
-          Pilih kelas mapel untuk melihat nilai
+          {isGuru
+            ? "Pilih kelas, mata pelajaran, dan semester / tahun ajaran untuk melihat nilai"
+            : "Pilih kelas mapel untuk melihat nilai"}
         </div>
       ) : loading ? (
         <LoadingBlock />
