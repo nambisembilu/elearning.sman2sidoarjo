@@ -126,12 +126,10 @@ const menuByRole = {
     ["Manajemen User", UserCog, "/main/manajemenUser"],
   ],
   guru: [
-    ["Analitik Kelas", BarChart3, "/main/analitikGuru"],
     ["Kelas", School, "/main/kelasGuru"],
-    ["Jadwal Mengajar", CalendarDays, "/main/jadwalMengajar"],
     ["Rubrik Mapel", Layers3, "/main/rubrikMapelKelas"],
-    ["Pengumuman", Megaphone, "/main/pengumumanGuru"],
-    ["Nilai Latihan Soal", ClipboardList, "/main/nilaiLatsol"],
+    ["Jadwal Pelajaran", CalendarDays, "/main/jadwalMengajar"],
+    ["Jadwal Akademik", LibraryBig, "/main/jadwalAkademikGuru"],
     ["Nilai Tugas", ClipboardList, "/main/nilaiTugas"],
     ["Sumatif LM", ClipboardList, "/main/sumatifLingkupMateri"],
     ["Nilai Ujian Sumatif", ClipboardList, "/main/nilaiUjianSumatif"],
@@ -257,6 +255,13 @@ function ProtectedRoute({ children }) {
 function RoleRedirect() {
   const { user } = useAuth();
   return <Navigate to={firstRouteByRole[user?.role] || "/"} replace />;
+}
+
+// Pembatas akses per-route: role yang tidak diizinkan dilempar ke halaman awalnya.
+function RoleGate({ allow, children }) {
+  const { user } = useAuth();
+  if (!allow.includes(user?.role)) return <RoleRedirect />;
+  return children;
 }
 
 function LandingPage() {
@@ -1699,6 +1704,8 @@ const resourceConfigs = {
   events: {
     title: "Jadwal Akademik",
     description: "Kelola agenda akademik sekolah berdasarkan tahun ajaran.",
+    readOnlyDescription:
+      "Agenda akademik sekolah berdasarkan tahun ajaran (hanya lihat).",
     endpoint: "academic-events",
     createLabel: "Tambah Kegiatan",
     fields: [
@@ -1775,7 +1782,7 @@ const resourceConfigs = {
   },
 };
 
-function ResourcePage({ config }) {
+function ResourcePage({ config, readOnly = false }) {
   const { options, refreshOptions } = useOptions();
   const { show, node } = useToast();
   const [rows, setRows] = useState([]);
@@ -1884,35 +1891,44 @@ function ResourcePage({ config }) {
     }
   };
 
-  const columns = [
-    ...config.columns.map(([key, header]) => ({
-      key,
-      header,
-      render: config.render?.[key],
-    })),
-    {
-      key: "actions",
-      header: "",
-      render: (row) => (
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={() => openForm(row)}>
-            <Edit3 className="h-3.5 w-3.5" />
-          </Button>
-          <Button variant="destructive" size="sm" onClick={() => remove(row)}>
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      ),
-    },
-  ];
+  const baseColumns = config.columns.map(([key, header]) => ({
+    key,
+    header,
+    render: config.render?.[key],
+  }));
+
+  const columns = readOnly
+    ? baseColumns
+    : [
+        ...baseColumns,
+        {
+          key: "actions",
+          header: "",
+          render: (row) => (
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => openForm(row)}>
+                <Edit3 className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => remove(row)}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ),
+        },
+      ];
 
   return (
     <div>
       {node}
       <PageHeader
         title={config.title}
-        description={config.description}
+        description={
+          readOnly
+            ? config.readOnlyDescription || config.description
+            : config.description
+        }
         action={
+          readOnly ? null : (
           <div className="flex flex-wrap gap-2">
             {config.importable ? (
               <>
@@ -1937,6 +1953,7 @@ function ResourcePage({ config }) {
               {config.createLabel}
             </Button>
           </div>
+          )
         }
       />
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center">
@@ -1964,7 +1981,7 @@ function ResourcePage({ config }) {
         onPageSizeChange={(s) => { setPageSize(s); setPage(1); }}
       />
       <FormDialog
-        open={dialogOpen}
+        open={dialogOpen && !readOnly}
         title={editing ? `Ubah ${config.title}` : config.createLabel}
         fields={config.fields}
         value={form}
@@ -1979,10 +1996,10 @@ function ResourcePage({ config }) {
 }
 
 function SchedulePage({ mode }) {
-  const title = mode === "guru" ? "Jadwal Mengajar" : "Jadwal Pelajaran";
+  const title = "Jadwal Pelajaran";
   const description =
     mode === "guru"
-      ? "Daftar jadwal mengajar sesuai kelas dan mata pelajaran yang diampu."
+      ? "Daftar jadwal pelajaran sesuai kelas dan mata pelajaran yang diampu."
       : "Daftar jadwal pelajaran berdasarkan kelas siswa.";
   return (
     <div>
@@ -3924,6 +3941,8 @@ const gradeTypeMeta = {
   final:       { label: "Nilai Akhir",             desc: "Rekap nilai akhir gabungan tugas dan ujian beserta capaian." },
 };
 
+const guruGradeTypes = ["assignments", "sumative", "exam", "final"];
+
 function GradesPage({ classSubjectId, compact = false, type = "final" }) {
   const { user } = useAuth();
   const { options } = useOptions();
@@ -3965,9 +3984,12 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const gradeTypeOpts = Object.entries(gradeTypeMeta).map(([value, { label }]) => ({ value, label }));
-  const meta = gradeTypeMeta[gradeType] || gradeTypeMeta.final;
   const isGuru = user?.role === "guru";
+  // Guru hanya berwenang atas penilaian tugas, sumatif LM, ujian sumatif, dan nilai akhir.
+  const gradeTypeOpts = Object.entries(gradeTypeMeta)
+    .filter(([value]) => !isGuru || guruGradeTypes.includes(value))
+    .map(([value, { label }]) => ({ value, label }));
+  const meta = gradeTypeMeta[gradeType] || gradeTypeMeta.final;
 
   const academicYearById = useMemo(
     () => new Map((options.academicYears || []).map((year) => [String(year.id), year])),
@@ -4801,68 +4823,220 @@ function AppRoutes() {
         <Route index element={<DashboardPage />} />
         <Route
           path="dataGuru"
-          element={<ResourcePage config={resourceConfigs.teachers} />}
+          element={
+            <RoleGate allow={["staff"]}>
+              <ResourcePage config={resourceConfigs.teachers} />
+            </RoleGate>
+          }
         />
         <Route
           path="dataSiswa"
-          element={<ResourcePage config={resourceConfigs.students} />}
+          element={
+            <RoleGate allow={["admin", "staff"]}>
+              <ResourcePage config={resourceConfigs.students} />
+            </RoleGate>
+          }
         />
         <Route
           path="kelas"
-          element={<ResourcePage config={resourceConfigs.classes} />}
+          element={
+            <RoleGate allow={["staff"]}>
+              <ResourcePage config={resourceConfigs.classes} />
+            </RoleGate>
+          }
         />
         <Route
           path="mataPelajaran"
-          element={<ResourcePage config={resourceConfigs.subjects} />}
+          element={
+            <RoleGate allow={["staff"]}>
+              <ResourcePage config={resourceConfigs.subjects} />
+            </RoleGate>
+          }
         />
         <Route
           path="jadwalAkademik"
-          element={<ResourcePage config={resourceConfigs.events} />}
+          element={
+            <RoleGate allow={["staff"]}>
+              <ResourcePage config={resourceConfigs.events} />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="jadwalAkademikGuru"
+          element={
+            <RoleGate allow={["guru"]}>
+              <ResourcePage config={resourceConfigs.events} readOnly />
+            </RoleGate>
+          }
         />
         <Route
           path="jadwalPelajaran"
-          element={<ResourcePage config={resourceConfigs.schedules} />}
+          element={
+            <RoleGate allow={["staff"]}>
+              <ResourcePage config={resourceConfigs.schedules} />
+            </RoleGate>
+          }
         />
         <Route
           path="tahunAjaran"
-          element={<ResourcePage config={resourceConfigs.years} />}
+          element={
+            <RoleGate allow={["staff"]}>
+              <ResourcePage config={resourceConfigs.years} />
+            </RoleGate>
+          }
         />
         <Route
           path="rangeNilaiKategori"
-          element={<ResourcePage config={resourceConfigs.gradeRanges} />}
+          element={
+            <RoleGate allow={["staff"]}>
+              <ResourcePage config={resourceConfigs.gradeRanges} />
+            </RoleGate>
+          }
         />
-        <Route path="rubrikMapel" element={<RubricsPage />} />
-        <Route path="rubrikMapelKelas" element={<RubricsPage />} />
-        <Route path="kelasGuru" element={<ClassesPage role="guru" />} />
+        <Route
+          path="rubrikMapel"
+          element={
+            <RoleGate allow={["staff"]}>
+              <RubricsPage />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="rubrikMapelKelas"
+          element={
+            <RoleGate allow={["guru"]}>
+              <RubricsPage />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="kelasGuru"
+          element={
+            <RoleGate allow={["guru"]}>
+              <ClassesPage role="guru" />
+            </RoleGate>
+          }
+        />
         <Route
           path="kelasGuru/detail/:id"
-          element={<ClassDetailPage role="guru" />}
+          element={
+            <RoleGate allow={["guru"]}>
+              <ClassDetailPage role="guru" />
+            </RoleGate>
+          }
         />
-        <Route path="kelasSiswa" element={<ClassesPage role="siswa" />} />
+        <Route
+          path="kelasSiswa"
+          element={
+            <RoleGate allow={["siswa"]}>
+              <ClassesPage role="siswa" />
+            </RoleGate>
+          }
+        />
         <Route
           path="kelasSiswa/detail/:id"
-          element={<ClassDetailPage role="siswa" />}
+          element={
+            <RoleGate allow={["siswa"]}>
+              <ClassDetailPage role="siswa" />
+            </RoleGate>
+          }
         />
         <Route
           path="jadwalMengajar"
-          element={<SchedulePage mode="guru" />}
+          element={
+            <RoleGate allow={["guru"]}>
+              <SchedulePage mode="guru" />
+            </RoleGate>
+          }
         />
         <Route
           path="jadwalSiswa"
-          element={<SchedulePage mode="siswa" />}
+          element={
+            <RoleGate allow={["siswa"]}>
+              <SchedulePage mode="siswa" />
+            </RoleGate>
+          }
         />
-        <Route path="nilaiLatsol"         element={<GradesPage key="practice"    type="practice" />} />
-        <Route path="nilaiTugas"          element={<GradesPage key="assignments" type="assignments" />} />
-        <Route path="sumatifLingkupMateri" element={<GradesPage key="sumative"   type="sumative" />} />
-        <Route path="nilaiUjianSumatif"   element={<GradesPage key="exam"        type="exam" />} />
-        <Route path="nilaiAkhir"          element={<GradesPage key="final-staff" type="final" />} />
-        <Route path="nilaiAkhirKelas"     element={<GradesPage key="final-guru"  type="final" />} />
-        <Route path="analitikGuru" element={<TeacherDashboard />} />
-        <Route path="pengumumanGuru" element={<AnnouncementsPage role="guru" />} />
-        <Route path="pengumumanSiswa" element={<AnnouncementsPage role="siswa" />} />
-        <Route path="daftarStaff" element={<StaffCurriculumPage />} />
-        <Route path="logAktivitas" element={<LogsPage />} />
-        <Route path="manajemenUser" element={<UserManagementPage />} />
+        <Route
+          path="nilaiLatsol"
+          element={
+            <RoleGate allow={["staff"]}>
+              <GradesPage key="practice" type="practice" />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="nilaiTugas"
+          element={
+            <RoleGate allow={["staff", "guru"]}>
+              <GradesPage key="assignments" type="assignments" />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="sumatifLingkupMateri"
+          element={
+            <RoleGate allow={["staff", "guru"]}>
+              <GradesPage key="sumative" type="sumative" />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="nilaiUjianSumatif"
+          element={
+            <RoleGate allow={["staff", "guru"]}>
+              <GradesPage key="exam" type="exam" />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="nilaiAkhir"
+          element={
+            <RoleGate allow={["staff"]}>
+              <GradesPage key="final-staff" type="final" />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="nilaiAkhirKelas"
+          element={
+            <RoleGate allow={["guru"]}>
+              <GradesPage key="final-guru" type="final" />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="pengumumanSiswa"
+          element={
+            <RoleGate allow={["siswa"]}>
+              <AnnouncementsPage role="siswa" />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="daftarStaff"
+          element={
+            <RoleGate allow={["admin"]}>
+              <StaffCurriculumPage />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="logAktivitas"
+          element={
+            <RoleGate allow={["admin"]}>
+              <LogsPage />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="manajemenUser"
+          element={
+            <RoleGate allow={["admin", "staff"]}>
+              <UserManagementPage />
+            </RoleGate>
+          }
+        />
         <Route path="*" element={<RoleRedirect />} />
       </Route>
     </Routes>

@@ -9,7 +9,8 @@
     "start": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "db:seed": "mysql -u root -p < database/elearning_sma.sql"
+    "db:seed": "mysql -u root -p < database/elearning_sma.sql",
+    "db:seed:demo": "mysql -u root -p elearning_sma < database/demo_seed.sql"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

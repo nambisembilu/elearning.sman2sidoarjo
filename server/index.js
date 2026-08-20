@@ -238,6 +238,9 @@ async function auth(req, res, next) {
   }
 }
 
+// Jenis penilaian yang boleh diakses guru.
+const GURU_GRADE_TYPES = ["assignments", "sumative", "exam", "final"];
+
 function requireRole(...roles) {
   return (req, res, next) => {
     if (!roles.includes(req.user.role)) {
@@ -540,7 +543,7 @@ app.get("/api/overview", auth, asyncHandler(async (req, res) => {
   });
 }));
 
-app.get("/api/teachers", auth, asyncHandler(async (req, res) => {
+app.get("/api/teachers", auth, requireRole("admin", "staff"), asyncHandler(async (req, res) => {
   const { search } = normalizePage(req);
   const params = [];
   let where = "u.role = 'guru' AND u.deleted_at IS NULL";
@@ -627,7 +630,7 @@ app.delete("/api/teachers/:id", auth, requireRole("admin", "staff"), asyncHandle
   res.json({ ok: true });
 }));
 
-app.get("/api/students", auth, asyncHandler(async (req, res) => {
+app.get("/api/students", auth, requireRole("admin", "staff"), asyncHandler(async (req, res) => {
   const { search } = normalizePage(req);
   const params = [];
   const filters = ["u.role = 'siswa'", "u.deleted_at IS NULL"];
@@ -1927,6 +1930,11 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
     return res.status(400).json({ message: "classSubjectId diperlukan" });
   }
 
+  // Guru hanya berwenang atas penilaian tugas, sumatif LM, ujian sumatif, dan nilai akhir.
+  if (req.user.role === "guru" && !GURU_GRADE_TYPES.includes(type)) {
+    return res.status(403).json({ message: "Jenis penilaian ini tidak dapat diakses guru" });
+  }
+
   const classSubject = await one(
     "SELECT id, guru_user_id AS guruUserId, academic_year_id AS academicYearId FROM class_subjects WHERE id = ?",
     [classSubjectId]
@@ -2500,25 +2508,22 @@ async function ensureSchema() {
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 }
 
-// Import skema + seed dari database/elearning_sma.sql saat startup.
-// File ini idempoten (CREATE TABLE IF NOT EXISTS + INSERT IGNORE), jadi aman
-// dijalankan tiap boot. Cocok untuk deploy Dockerfile-only + managed database:
-// database sudah dibuat oleh penyedia, jadi statement CREATE DATABASE / USE
-// (butuh hak server-level) dibuang agar tidak "Access denied" pada user terbatas.
-// Nonaktifkan dengan AUTO_MIGRATE=false bila skema dikelola manual.
-async function autoMigrate() {
-  if (process.env.AUTO_MIGRATE === "false") return;
-  const sqlPath = path.join(rootDir, "database", "elearning_sma.sql");
+// Jalankan satu file .sql lewat koneksi multipleStatements tersendiri.
+// Statement CREATE DATABASE / USE dibuang: pada managed database (Coolify dsb.)
+// database sudah dibuat penyedia dan user aplikasi biasanya tidak punya hak
+// server-level, sehingga statement tersebut akan gagal "Access denied".
+async function runSqlFile(fileName, label) {
+  const sqlPath = path.join(rootDir, "database", fileName);
   if (!fs.existsSync(sqlPath)) {
-    console.warn("AUTO_MIGRATE dilewati: database/elearning_sma.sql tidak ditemukan.");
-    return;
+    console.warn(`${label} dilewati: database/${fileName} tidak ditemukan.`);
+    return false;
   }
   const sql = fs
     .readFileSync(sqlPath, "utf8")
     .replace(/CREATE\s+DATABASE[\s\S]*?;/i, "")
     .replace(/USE\s+`?[\w-]+`?\s*;/i, "")
     .trim();
-  if (!sql) return;
+  if (!sql) return false;
 
   const conn = await mysql.createConnection({
     host: process.env.DB_HOST || "127.0.0.1",
@@ -2530,9 +2535,31 @@ async function autoMigrate() {
   });
   try {
     await conn.query(sql);
-    console.log("AUTO_MIGRATE: skema & seed database dipastikan ada.");
+    return true;
   } finally {
     await conn.end();
+  }
+}
+
+// Import skema + seed dasar dari database/elearning_sma.sql saat startup.
+// File ini idempoten (CREATE TABLE IF NOT EXISTS + INSERT IGNORE), jadi aman
+// dijalankan tiap boot. Nonaktifkan dengan AUTO_MIGRATE=false bila skema
+// dikelola manual.
+async function autoMigrate() {
+  if (process.env.AUTO_MIGRATE === "false") return;
+  if (await runSqlFile("elearning_sma.sql", "AUTO_MIGRATE")) {
+    console.log("AUTO_MIGRATE: skema & seed database dipastikan ada.");
+  }
+}
+
+// Data demo guru (kelas, rubrik, jadwal, dan penilaian yang sudah terisi).
+// Ikut dijalankan tiap startup: bagian INSERT-nya idempoten, dan bagian akhir
+// file menggeser ulang seluruh tanggal demo relatif terhadap hari ini supaya
+// demo tidak pernah tampak kedaluwarsa. Matikan dengan SEED_DEMO=false.
+async function seedDemo() {
+  if (process.env.SEED_DEMO === "false") return;
+  if (await runSqlFile("demo_seed.sql", "SEED_DEMO")) {
+    console.log("SEED_DEMO: data demo guru dipastikan ada & tanggalnya disegarkan.");
   }
 }
 
@@ -2540,6 +2567,7 @@ const host = process.env.HOST || "127.0.0.1";
 
 autoMigrate()
   .then(() => ensureSchema())
+  .then(() => seedDemo())
   .then(() => {
     app.listen(port, host, () => {
       console.log(`E-learning SMA API running on http://${host}:${port}`);
