@@ -1403,7 +1403,8 @@ app.delete("/api/lesson-schedules/:id", auth, requireRole("admin", "staff"), asy
   res.json({ ok: true });
 }));
 
-app.get("/api/class-subjects/:id/students", auth, asyncHandler(async (req, res) => {
+// Berisi email & no. telepon siswa, jadi tidak dibuka untuk role siswa.
+app.get("/api/class-subjects/:id/students", auth, requireRole("admin", "staff", "guru"), asyncHandler(async (req, res) => {
   const rows = await q(
     `SELECT u.id AS userIdSiswa, sp.user_id AS siswaId, sp.nis, sp.nisn, u.nama AS namaSiswa,
             u.no_telp AS noTelpSiswa, u.email AS emailSiswa, cst.status AS statusKeanggotaan
