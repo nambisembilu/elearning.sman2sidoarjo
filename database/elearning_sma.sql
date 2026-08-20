@@ -74,6 +74,21 @@ CREATE TABLE IF NOT EXISTS siswa_profiles (
   FOREIGN KEY (kelas_id) REFERENCES classes(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS class_students (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  class_id INT NOT NULL,
+  siswa_user_id INT NOT NULL,
+  academic_year_id INT NOT NULL,
+  status ENUM('Aktif', 'Naik', 'Tinggal', 'Lulus', 'Pindah') NOT NULL DEFAULT 'Aktif',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_class_student (class_id, siswa_user_id),
+  KEY idx_class_student_siswa (siswa_user_id),
+  FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+  FOREIGN KEY (siswa_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (academic_year_id) REFERENCES academic_years(id)
+);
+
 CREATE TABLE IF NOT EXISTS subjects (
   id INT AUTO_INCREMENT PRIMARY KEY,
   judul_mapel VARCHAR(160) NOT NULL,
@@ -316,7 +331,8 @@ CREATE TABLE IF NOT EXISTS grade_ranges (
 CREATE TABLE IF NOT EXISTS announcements (
   id INT AUTO_INCREMENT PRIMARY KEY,
   author_user_id INT NOT NULL,
-  class_subject_id INT NOT NULL,
+  class_subject_id INT NULL,
+  sasaran ENUM('semua', 'siswa', 'kelas') NOT NULL DEFAULT 'kelas',
   judul VARCHAR(180) NOT NULL,
   isi MEDIUMTEXT NOT NULL,
   prioritas ENUM('Normal', 'Penting', 'Mendesak') NOT NULL DEFAULT 'Normal',

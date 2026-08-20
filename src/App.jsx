@@ -94,6 +94,12 @@ const roleLabels = {
   siswa: "Siswa",
 };
 
+function userRoleLabel(user) {
+  const label = roleLabels[user?.role] || user?.role || "";
+  if (!user?.wakasekKurikulum || user.role === "staff") return label;
+  return `${label} · Wakasek Kurikulum`;
+}
+
 const firstRouteByRole = {
   admin: "/main/daftarStaff",
   staff: "/main/dataGuru",
@@ -106,12 +112,14 @@ const menuByRole = {
     ["Daftar Staff", ShieldCheck, "/main/daftarStaff"],
     ["Log Aktivitas", ClipboardList, "/main/logAktivitas"],
     ["Data Siswa", Users, "/main/dataSiswa"],
+    ["Pengumuman", Megaphone, "/main/pengumuman"],
     ["Manajemen User", UserCog, "/main/manajemenUser"],
   ],
   staff: [
     ["Data Guru", Users, "/main/dataGuru"],
     ["Data Siswa", Users, "/main/dataSiswa"],
     ["Kelas", School, "/main/kelas"],
+    ["Kenaikan Kelas", TrendingUp, "/main/kenaikanKelas"],
     ["Mata Pelajaran", BookOpen, "/main/mataPelajaran"],
     ["Jadwal Akademik", CalendarDays, "/main/jadwalAkademik"],
     ["Jadwal Pelajaran", ListChecks, "/main/jadwalPelajaran"],
@@ -123,6 +131,7 @@ const menuByRole = {
     ["Sumatif LM", ClipboardList, "/main/sumatifLingkupMateri"],
     ["Nilai Ujian Sumatif", ClipboardList, "/main/nilaiUjianSumatif"],
     ["Nilai Akhir", GraduationCap, "/main/nilaiAkhir"],
+    ["Pengumuman", Megaphone, "/main/pengumuman"],
     ["Manajemen User", UserCog, "/main/manajemenUser"],
   ],
   guru: [
@@ -134,13 +143,33 @@ const menuByRole = {
     ["Sumatif LM", ClipboardList, "/main/sumatifLingkupMateri"],
     ["Nilai Ujian Sumatif", ClipboardList, "/main/nilaiUjianSumatif"],
     ["Nilai Akhir", GraduationCap, "/main/nilaiAkhirKelas"],
+    ["Pengumuman", Megaphone, "/main/pengumuman"],
   ],
   siswa: [
     ["Kelas", School, "/main/kelasSiswa"],
     ["Jadwal Pelajaran", CalendarDays, "/main/jadwalSiswa"],
+    ["Nilai", GraduationCap, "/main/nilaiSiswa"],
     ["Pengumuman", Megaphone, "/main/pengumumanSiswa"],
   ],
 };
+
+// Guru yang merangkap wakasek kurikulum mendapat dua kelompok menu: menu
+// mengajarnya sendiri, lalu menu kurikulum. Path yang sudah ada di menu guru
+// tidak diulang, dan judul kelompok mencegah label kembar ("Kelas") rancu.
+function menuForUser(user) {
+  const base = menuByRole[user?.role] || [];
+  if (!user?.wakasekKurikulum || user.role === "staff" || user.role === "admin") {
+    return [{ title: null, items: base }];
+  }
+  const seen = new Set(base.map(([, , path]) => path));
+  return [
+    { title: "Mengajar", items: base },
+    {
+      title: "Kurikulum",
+      items: (menuByRole.staff || []).filter(([, , path]) => !seen.has(path)),
+    },
+  ];
+}
 
 function AuthProvider({ children }) {
   const [session, setSession] = useState(() => getStoredSession());
@@ -258,9 +287,16 @@ function RoleRedirect() {
 }
 
 // Pembatas akses per-route: role yang tidak diizinkan dilempar ke halaman awalnya.
+// Wakasek kurikulum adalah jabatan, bukan role: seorang guru yang menjabat
+// tetap ber-role "guru" tapi berhak atas seluruh halaman staff kurikulum.
+function hasAccess(user, allow) {
+  if (allow.includes(user?.role)) return true;
+  return allow.includes("staff") && Boolean(user?.wakasekKurikulum);
+}
+
 function RoleGate({ allow, children }) {
   const { user } = useAuth();
-  if (!allow.includes(user?.role)) return <RoleRedirect />;
+  if (!hasAccess(user, allow)) return <RoleRedirect />;
   return children;
 }
 
@@ -466,7 +502,7 @@ function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
-  const menus = menuByRole[user?.role] || [];
+  const menus = menuForUser(user);
 
   const doLogout = () => {
     logout();
@@ -521,7 +557,7 @@ function AppShell() {
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold">E-Learning SMA</div>
             <div className="text-xs text-muted-foreground">
-              {roleLabels[user?.role]}
+              {userRoleLabel(user)}
             </div>
           </div>
         </div>
@@ -529,9 +565,18 @@ function AppShell() {
         {/* Nav */}
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-3 app-scrollbar">
           {navLink("/main", "Beranda", Home, true)}
-          {menus.map(([label, Icon, route]) =>
-            navLink(route, label, Icon),
-          )}
+          {menus.map((group, index) => (
+            <div key={group.title || index} className={index ? "pt-3" : ""}>
+              {group.title ? (
+                <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                  {group.title}
+                </div>
+              ) : null}
+              {group.items.map(([label, Icon, route]) =>
+                navLink(route, label, Icon),
+              )}
+            </div>
+          ))}
         </nav>
 
         {/* User footer */}
@@ -543,7 +588,7 @@ function AppShell() {
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{user?.nama}</div>
               <div className="text-xs text-muted-foreground">
-                {roleLabels[user?.role]}
+                {userRoleLabel(user)}
               </div>
             </div>
           </div>
@@ -1191,14 +1236,28 @@ const priorityTones = {
   Mendesak: "bg-rose-100 text-rose-700",
 };
 
-function AnnouncementsPage({ role }) {
-  const isGuru = role === "guru";
+const sasaranLabels = {
+  semua: "Semua pengguna",
+  siswa: "Semua siswa",
+  kelas: "Kelas mapel",
+};
+
+const sasaranHints = {
+  semua: "Pengumuman dikirim ke seluruh pengguna: staff, guru, dan siswa.",
+  siswa: "Pengumuman dikirim ke seluruh siswa sekolah.",
+  kelas: "Pengumuman dikirim ke siswa pada kelas mapel yang Anda ampu.",
+};
+
+function AnnouncementsPage() {
+  const { user } = useAuth();
   const { options } = useOptions();
   const { show, node } = useToast();
   const [items, setItems] = useState(null);
+  const [meta, setMeta] = useState({ canCompose: false, allowedSasaran: [] });
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
+    sasaran: "",
     classSubjectId: "",
     judul: "",
     isi: "",
@@ -1207,27 +1266,51 @@ function AnnouncementsPage({ role }) {
   });
 
   const load = useCallback(() => {
-    apiFetch("/announcements").then((res) => setItems(res.data || [])).catch(() => setItems([]));
+    apiFetch("/announcements")
+      .then((res) => {
+        setItems(res.data || []);
+        setMeta(res.meta || { canCompose: false, allowedSasaran: [] });
+      })
+      .catch(() => setItems([]));
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  const allowedSasaran = meta.allowedSasaran || [];
+  const sasaran = form.sasaran || allowedSasaran[0] || "";
+  const isAdmin = user?.role === "admin";
+
+  const openCompose = () => {
+    setForm({
+      sasaran: allowedSasaran[0] || "",
+      classSubjectId: "",
+      judul: "",
+      isi: "",
+      prioritas: "Normal",
+      pinned: false,
+    });
+    setOpen(true);
+  };
+
   const submit = async () => {
-    if (!form.classSubjectId || !form.judul.trim() || !form.isi.trim()) {
-      show("Kelas, judul, dan isi wajib diisi", "error");
+    if (!form.judul.trim() || !form.isi.trim()) {
+      show("Judul dan isi wajib diisi", "error");
+      return;
+    }
+    if (sasaran === "kelas" && !form.classSubjectId) {
+      show("Kelas mapel wajib dipilih", "error");
       return;
     }
     setSaving(true);
     try {
       const res = await apiFetch("/announcements", {
         method: "POST",
-        body: { ...form, pinned: form.pinned ? 1 : 0 },
+        body: { ...form, sasaran, pinned: form.pinned ? 1 : 0 },
       });
-      show(`Pengumuman terkirim ke ${res.penerima} siswa`);
+      show(`Pengumuman terkirim ke ${res.penerima} penerima`);
       setOpen(false);
-      setForm({ classSubjectId: "", judul: "", isi: "", prioritas: "Normal", pinned: false });
       load();
     } catch (e) {
       show(e.message, "error");
@@ -1247,9 +1330,10 @@ function AnnouncementsPage({ role }) {
     }
   };
 
-  const classOptions = (options.classSubjects || []).map((cs) => ({
+  // Sasaran "kelas" hanya sah untuk kelas yang benar-benar diampu sendiri.
+  const classOptions = (options.teachingClassSubjects || options.classSubjects || []).map((cs) => ({
     value: String(cs.id),
-    label: cs.label || `${cs.namaKelas} - ${cs.judulMapel}`,
+    label: `${cs.namaKelas} - ${cs.judulMapel}`,
   }));
 
   return (
@@ -1258,13 +1342,13 @@ function AnnouncementsPage({ role }) {
       <PageHeader
         title="Pengumuman"
         description={
-          isGuru
-            ? "Bagikan informasi ke kelas Anda. Siswa akan menerima notifikasi otomatis."
-            : "Informasi terbaru dari guru pengampu kelas Anda."
+          meta.canCompose
+            ? sasaranHints[allowedSasaran[0]] || "Bagikan informasi ke warga sekolah."
+            : "Informasi terbaru untuk Anda."
         }
         action={
-          isGuru ? (
-            <Button onClick={() => setOpen(true)}>
+          meta.canCompose ? (
+            <Button onClick={openCompose}>
               <Plus className="h-4 w-4" />
               Buat Pengumuman
             </Button>
@@ -1292,14 +1376,18 @@ function AnnouncementsPage({ role }) {
                       <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", priorityTones[a.prioritas] || priorityTones.Normal)}>
                         {a.prioritas}
                       </span>
+                      <Badge tone="muted">{sasaranLabels[a.sasaran] || "Kelas mapel"}</Badge>
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      {a.namaKelas} · {a.judulMapel}
-                      {a.pengirim ? ` · ${a.pengirim}` : ""} · {formatDateTime(a.createdAt)}
+                      {a.sasaran === "kelas" && a.namaKelas
+                        ? `${a.namaKelas} · ${a.judulMapel} · `
+                        : ""}
+                      {a.pengirim ? `${a.pengirim} (${roleLabels[a.peranPengirim] || a.peranPengirim}) · ` : ""}
+                      {formatDateTime(a.createdAt)}
                     </div>
                     <p className="mt-3 whitespace-pre-wrap text-sm text-foreground/90">{a.isi}</p>
                   </div>
-                  {isGuru ? (
+                  {a.milikSaya || isAdmin ? (
                     <Button variant="ghost" size="icon" onClick={() => remove(a.id)} aria-label="Hapus">
                       <Trash2 className="h-4 w-4 text-rose-500" />
                     </Button>
@@ -1328,14 +1416,34 @@ function AnnouncementsPage({ role }) {
         }
       >
         <div className="space-y-4">
-          <Field label="Kelas & Mapel">
-            <SearchableSelect
-              value={form.classSubjectId}
-              onChange={(v) => setForm((f) => ({ ...f, classSubjectId: v }))}
-              options={classOptions}
-              placeholder="Pilih kelas mapel..."
-            />
+          <Field label="Sasaran" hint={sasaranHints[sasaran]}>
+            {allowedSasaran.length > 1 ? (
+              <Select
+                value={sasaran}
+                onChange={(e) => setForm((f) => ({ ...f, sasaran: e.target.value }))}
+              >
+                {allowedSasaran.map((value) => (
+                  <option key={value} value={value}>
+                    {sasaranLabels[value]}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <div className="flex h-10 items-center rounded-md border bg-muted/30 px-3 text-sm">
+                {sasaranLabels[sasaran] || "-"}
+              </div>
+            )}
           </Field>
+          {sasaran === "kelas" ? (
+            <Field label="Kelas & Mapel">
+              <SearchableSelect
+                value={form.classSubjectId}
+                onChange={(v) => setForm((f) => ({ ...f, classSubjectId: v }))}
+                options={classOptions}
+                placeholder="Pilih kelas mapel..."
+              />
+            </Field>
+          ) : null}
           <Field label="Judul">
             <Input
               value={form.judul}
@@ -1489,6 +1597,27 @@ function FieldInput({ field, value, formValue, options, onChange }) {
       placeholder={field.placeholder}
     />
   );
+}
+
+// Opsi semester selalu dipasangkan dengan tahun ajarannya — "Ganjil" saja
+// ambigu karena setiap tahun ajaran punya semester dengan judul yang sama.
+function semesterYearOptions(options, filterAcademicYearIds = null) {
+  const yearById = new Map(
+    (options.academicYears || []).map((year) => [String(year.id), year]),
+  );
+  return (options.semesters || [])
+    .filter(
+      (semester) =>
+        !filterAcademicYearIds
+        || filterAcademicYearIds.has(String(semester.academicYearId)),
+    )
+    .map((semester) => {
+      const year = yearById.get(String(semester.academicYearId));
+      return {
+        value: String(semester.id),
+        label: `${semester.judulSemester} / ${year?.tahunAjaran || "Tahun ajaran tidak tersedia"}`,
+      };
+    });
 }
 
 const optionMappers = {
@@ -2088,11 +2217,17 @@ function ClassesPage({ role }) {
                   <CardTitle>{row.judulMapel}</CardTitle>
                   <CardDescription>
                     {row.namaKelas} - {row.guruPengampu}
+                    {row.tahunAjaran ? ` · ${row.tahunAjaran}` : ""}
                   </CardDescription>
                 </div>
-                <Badge>
-                  {row.jenjang} {row.jurusan}
-                </Badge>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <Badge>
+                    {row.jenjang} {row.jurusan}
+                  </Badge>
+                  {row.statusKeanggotaan && row.statusKeanggotaan !== "Aktif" ? (
+                    <Badge tone="muted">Arsip · {row.statusKeanggotaan}</Badge>
+                  ) : null}
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -2129,9 +2264,10 @@ function ClassDetailPage({ role }) {
   const { id } = useParams();
   const { options } = useOptions();
   const [tab, setTab] = useState("materi");
-  const classSubject = options.classSubjects.find(
-    (item) => Number(item.id) === Number(id),
-  );
+  const classSubject = [
+    ...(options.classSubjects || []),
+    ...(options.teachingClassSubjects || []),
+  ].find((item) => Number(item.id) === Number(id));
   const isStudent = role === "siswa";
 
   const tabs = [
@@ -2176,7 +2312,11 @@ function ClassDetailPage({ role }) {
     {
       value: "nilai",
       label: "Nilai",
-      content: <GradesPage classSubjectId={id} compact />,
+      content: isStudent ? (
+        <StudentGradesPage classSubjectId={id} compact />
+      ) : (
+        <GradesPage classSubjectId={id} compact />
+      ),
     },
   ];
 
@@ -3557,7 +3697,10 @@ function GroupsPanel({ classSubjectId }) {
 
 function RubricsPage({ classSubjectId, compact = false }) {
   const { options } = useOptions();
+  const { user } = useAuth();
   const { show, node } = useToast();
+  // Siswa hanya boleh membaca rubrik — API pun menolak tulis dari role siswa.
+  const canManage = ["admin", "staff", "guru"].includes(user?.role);
   const [rows, setRows] = useState(null);
   const [form, setForm] = useState(null);
   const targetClassSubjectId = classSubjectId;
@@ -3607,18 +3750,20 @@ function RubricsPage({ classSubjectId, compact = false }) {
       <SectionToolbar
         title={compact ? "Rubrik Mapel" : "Daftar Rubrik"}
         action={
-          <Button
-            onClick={() =>
-              setForm({
-                subjectId: subjectFromClass,
-                statusKunci: 0,
-                tujuanPembelajaran: [emptyObjective()],
-              })
-            }
-          >
-            <Plus className="h-4 w-4" />
-            Tambah Rubrik
-          </Button>
+          canManage ? (
+            <Button
+              onClick={() =>
+                setForm({
+                  subjectId: subjectFromClass,
+                  statusKunci: 0,
+                  tujuanPembelajaran: [emptyObjective()],
+                })
+              }
+            >
+              <Plus className="h-4 w-4" />
+              Tambah Rubrik
+            </Button>
+          ) : null
         }
       />
       <div className="grid gap-4">
@@ -3630,6 +3775,9 @@ function RubricsPage({ classSubjectId, compact = false }) {
                   <CardTitle>{scope.lingkupMateri}</CardTitle>
                   <CardDescription>
                     {scope.judulMapel} - {scope.jumlahTP} tujuan pembelajaran
+                    {scope.judulSemester
+                      ? ` · Semester ${scope.judulSemester} / ${scope.tahunAjaran || "-"}`
+                      : ""}
                   </CardDescription>
                 </div>
                 <Badge tone={scope.statusKunci ? "success" : "muted"}>
@@ -3652,40 +3800,48 @@ function RubricsPage({ classSubjectId, compact = false }) {
                   </div>
                 </div>
               ))}
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setForm(scope)}
-                >
-                  Ubah
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={async () => {
-                    if (confirm("Hapus rubrik?")) {
-                      await apiFetch(
-                        `/rubrics/${scope.lingkupMateriId}`,
-                        { method: "DELETE" },
-                      );
-                      await load();
-                    }
-                  }}
-                >
-                  Hapus
-                </Button>
-              </div>
+              {canManage ? (
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setForm(scope)}
+                  >
+                    Ubah
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={async () => {
+                      if (!confirm("Hapus rubrik?")) return;
+                      try {
+                        await apiFetch(
+                          `/rubrics/${scope.lingkupMateriId}`,
+                          { method: "DELETE" },
+                        );
+                        show("Rubrik dihapus");
+                        await load();
+                      } catch (err) {
+                        show(err.message || "Gagal menghapus rubrik", "error");
+                      }
+                    }}
+                  >
+                    Hapus
+                  </Button>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         ))}
       </div>
-      <RubricDialog
-        form={form}
-        setForm={setForm}
-        options={options}
-        onSave={save}
-      />
+      {canManage ? (
+        <RubricDialog
+          form={form}
+          setForm={setForm}
+          options={options}
+          onSave={save}
+        />
+      ) : null}
     </div>
   );
 }
@@ -3715,10 +3871,9 @@ function RubricDialog({ form, setForm, options, onSave }) {
     label: item.label,
   }));
 
-  const semesterOpts = options.semesters.map((item) => ({
-    value: String(item.id),
-    label: item.judulSemester,
-  }));
+  // Judul semester saja ambigu (setiap tahun ajaran punya Ganjil & Genap),
+  // jadi tampilkan sekalian tahun ajarannya.
+  const semesterOpts = semesterYearOptions(options);
 
   const statusKunciOpts = [
     { value: "0", label: "Draft" },
@@ -3747,11 +3902,12 @@ function RubricDialog({ form, setForm, options, onSave }) {
             options={subjectOpts}
           />
         </Field>
-        <Field label="Semester">
+        <Field label="Semester / Tahun Ajaran">
           <SearchableSelect
             value={String(form.semesterId || "")}
             onChange={(v) => setForm({ ...form, semesterId: v })}
             options={semesterOpts}
+            placeholder="Pilih semester / tahun ajaran..."
           />
         </Field>
         <Field label="Lingkup Materi">
@@ -3984,34 +4140,30 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const isGuru = user?.role === "guru";
+  // Guru yang merangkap wakasek kurikulum memakai tampilan staff (semua kelas,
+  // semua jenis penilaian), jadi pembatasan di bawah hanya untuk guru murni.
+  const isGuru = user?.role === "guru" && !user?.wakasekKurikulum;
   // Guru hanya berwenang atas penilaian tugas, sumatif LM, ujian sumatif, dan nilai akhir.
   const gradeTypeOpts = Object.entries(gradeTypeMeta)
     .filter(([value]) => !isGuru || guruGradeTypes.includes(value))
     .map(([value, { label }]) => ({ value, label }));
   const meta = gradeTypeMeta[gradeType] || gradeTypeMeta.final;
 
-  const academicYearById = useMemo(
-    () => new Map((options.academicYears || []).map((year) => [String(year.id), year])),
-    [options.academicYears],
-  );
-
   const teacherAcademicYearIds = useMemo(
     () => new Set((options.classSubjects || []).map((item) => String(item.academicYearId))),
     [options.classSubjects],
   );
 
+  const myClassSubjects = useMemo(
+    () => (options.teachingClassSubjects?.length
+      ? options.teachingClassSubjects
+      : options.classSubjects) || [],
+    [options.classSubjects, options.teachingClassSubjects],
+  );
+
   const semesterOptions = useMemo(
-    () => (options.semesters || [])
-      .filter((semester) => !isGuru || teacherAcademicYearIds.has(String(semester.academicYearId)))
-      .map((semester) => {
-        const year = academicYearById.get(String(semester.academicYearId));
-        return {
-          value: String(semester.id),
-          label: `${semester.judulSemester} / ${year?.tahunAjaran || "Tahun ajaran tidak tersedia"}`,
-        };
-      }),
-    [academicYearById, isGuru, options.semesters, teacherAcademicYearIds],
+    () => semesterYearOptions(options, isGuru ? teacherAcademicYearIds : null),
+    [isGuru, options, teacherAcademicYearIds],
   );
 
   const selectedSemester = (options.semesters || []).find(
@@ -4020,11 +4172,11 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
   const selectedAcademicYearId = selectedSemester?.academicYearId;
 
   const teacherClassSubjects = useMemo(
-    () => (options.classSubjects || []).filter(
+    () => myClassSubjects.filter(
       (item) => !selectedAcademicYearId
         || String(item.academicYearId) === String(selectedAcademicYearId),
     ),
-    [options.classSubjects, selectedAcademicYearId],
+    [myClassSubjects, selectedAcademicYearId],
   );
 
   const teacherClassOptions = useMemo(() => {
@@ -4303,6 +4455,455 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
   );
 }
 
+const studentGradeTones = {
+  Tugas: "default",
+  "Latihan Soal": "muted",
+  "Sumatif Lingkup Materi": "warning",
+  STS: "success",
+  SAS: "success",
+};
+
+function ScoreCard({ label, value, suffix }) {
+  return (
+    <div className="rounded-xl border bg-card p-4">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-2xl font-semibold">
+        {value === null || value === undefined ? "—" : value}
+      </div>
+      {suffix ? <div className="mt-1 text-xs text-muted-foreground">{suffix}</div> : null}
+    </div>
+  );
+}
+
+// Rekap nilai milik siswa sendiri. Selalu read-only: siswa tidak boleh
+// menyunting nilai, dan API /siswa/grades hanya mengembalikan datanya sendiri.
+function StudentGradesPage({ classSubjectId, compact = false }) {
+  const { options } = useOptions();
+  const { show, node } = useToast();
+  const [classSubjects, setClassSubjects] = useState(classSubjectId ? [] : null);
+  const [selected, setSelected] = useState(classSubjectId || "");
+  const [semesterId, setSemesterId] = useState("");
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (classSubjectId) return;
+    apiFetch("/class-subjects")
+      .then((res) => {
+        const rows = res.data || [];
+        setClassSubjects(rows);
+        setSelected((current) => current || String(rows[0]?.id || ""));
+      })
+      .catch(() => setClassSubjects([]));
+  }, [classSubjectId]);
+
+  const activeClassSubject = useMemo(
+    () => (classSubjects || []).find((item) => String(item.id) === String(selected)),
+    [classSubjects, selected],
+  );
+
+  // Semester dibatasi ke tahun ajaran kelas yang sedang dibuka — server pun
+  // menolak semester dari tahun ajaran lain.
+  const semesterOptions = useMemo(() => {
+    const academicYearId =
+      activeClassSubject?.academicYearId ?? data?.classSubject?.academicYearId;
+    if (!academicYearId) return [];
+    return semesterYearOptions(options, new Set([String(academicYearId)]));
+  }, [activeClassSubject, data?.classSubject?.academicYearId, options]);
+
+  useEffect(() => {
+    setSemesterId("");
+  }, [selected]);
+
+  const load = useCallback(async () => {
+    if (!selected) {
+      setData(null);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await apiFetch(
+        withQuery("/siswa/grades", { classSubjectId: selected, semesterId }),
+      );
+      setData(res);
+    } catch (err) {
+      show(err.message || "Gagal memuat nilai", "error");
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [selected, semesterId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const rekap = data?.rekap;
+  const items = data?.items || [];
+
+  const columns = [
+    {
+      key: "jenis",
+      header: "Jenis",
+      render: (row) => (
+        <Badge tone={studentGradeTones[row.jenis] || "default"}>{row.jenis}</Badge>
+      ),
+    },
+    {
+      key: "judul",
+      header: "Penilaian",
+      render: (row) => (
+        <div className="min-w-48">
+          <div className="font-medium">{row.judul}</div>
+          {row.tujuanPembelajaran ? (
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {row.tujuanPembelajaran}
+            </div>
+          ) : null}
+          {row.feedback ? (
+            <div className="mt-1 text-xs text-primary">Catatan guru: {row.feedback}</div>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "tanggal",
+      header: "Tanggal",
+      render: (row) => (
+        <span className="text-sm text-muted-foreground">
+          {row.tanggal ? formatDate(row.tanggal) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "nilai",
+      header: "Nilai",
+      render: (row) =>
+        row.nilai === null || row.nilai === undefined ? (
+          <span className="text-xs text-muted-foreground">{row.status}</span>
+        ) : (
+          <span className="font-semibold">{row.nilai}</span>
+        ),
+    },
+  ];
+
+  if (classSubjects === null) return <LoadingBlock />;
+
+  return (
+    <div>
+      {node}
+      {!compact ? (
+        <PageHeader
+          title="Nilai Saya"
+          description="Rekap nilai tugas, latihan soal, sumatif, dan ujian Anda."
+        />
+      ) : null}
+
+      <div className="mb-4 grid gap-3 md:grid-cols-2">
+        {!classSubjectId ? (
+          <Field label="Mata Pelajaran">
+            <SearchableSelect
+              value={String(selected)}
+              onChange={setSelected}
+              options={(classSubjects || []).map((item) => ({
+                value: String(item.id),
+                label: `${item.namaKelas} - ${item.judulMapel}`
+                  + (item.tahunAjaran ? ` (${item.tahunAjaran})` : "")
+                  + (item.statusKeanggotaan && item.statusKeanggotaan !== "Aktif" ? " · arsip" : ""),
+              }))}
+              placeholder="Pilih mata pelajaran..."
+            />
+          </Field>
+        ) : null}
+        <Field label="Semester / Tahun Ajaran">
+          <SearchableSelect
+            value={semesterId}
+            onChange={setSemesterId}
+            options={semesterOptions}
+            placeholder="Semua semester"
+          />
+        </Field>
+      </div>
+
+      {!selected ? (
+        <div className="flex min-h-48 items-center justify-center rounded-xl border bg-card text-sm text-muted-foreground">
+          Pilih mata pelajaran untuk melihat nilai
+        </div>
+      ) : loading ? (
+        <LoadingBlock />
+      ) : !data ? (
+        <div className="flex min-h-48 items-center justify-center rounded-xl border bg-card text-sm text-muted-foreground">
+          Nilai belum tersedia
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <ScoreCard
+              label="Nilai Akhir"
+              value={rekap.nilaiAkhir}
+              suffix={rekap.capaian !== "-" ? rekap.capaian : "Belum ada nilai"}
+            />
+            <ScoreCard label="Rata-rata Tugas" value={rekap.rataTugas} />
+            <ScoreCard label="Rata-rata Latihan Soal" value={rekap.rataLatihanSoal} />
+            <ScoreCard label="Rata-rata Sumatif LM" value={rekap.rataSumatif} />
+            <ScoreCard label="Rata-rata Ujian Sumatif" value={rekap.rataUjian} />
+          </div>
+
+          {data.classSubject?.statusKeanggotaan
+            && data.classSubject.statusKeanggotaan !== "Aktif" ? (
+            <div className="rounded-lg border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
+              Kelas arsip ({data.classSubject.namaKelas} ·{" "}
+              {data.classSubject.tahunAjaran}) — nilai di sini tetap tersimpan
+              setelah Anda naik kelas.
+            </div>
+          ) : null}
+
+          {rekap.jumlahBelumDinilai ? (
+            <div className="rounded-lg border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
+              {rekap.jumlahBelumDinilai} penilaian belum bernilai — nilai muncul
+              setelah guru menilai dan merilisnya.
+            </div>
+          ) : null}
+
+          <Table
+            rows={items}
+            columns={columns}
+            empty="Belum ada penilaian pada semester ini"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const promotionStatusMeta = {
+  Naik: {
+    label: "Naik Kelas",
+    hint: "Siswa terpilih dipindah ke kelas tujuan dan keanggotaan kelas lamanya ditandai “Naik”.",
+  },
+  Tinggal: {
+    label: "Tinggal Kelas",
+    hint: "Siswa terpilih tetap di jenjang yang sama — pilih kelas tujuan pada tahun ajaran berikutnya.",
+  },
+  Lulus: {
+    label: "Lulus",
+    hint: "Siswa terpilih tidak lagi punya kelas aktif. Seluruh riwayat dan nilainya tetap tersimpan.",
+  },
+};
+
+const membershipTones = {
+  Aktif: "success",
+  Naik: "default",
+  Tinggal: "warning",
+  Lulus: "muted",
+  Pindah: "muted",
+};
+
+const roleTones = { admin: "danger", staff: "warning", guru: "default", siswa: "muted" };
+
+function PromotionPage() {
+  const { options } = useOptions();
+  const { show, node } = useToast();
+  const [fromClassId, setFromClassId] = useState("");
+  const [toClassId, setToClassId] = useState("");
+  const [status, setStatus] = useState("Naik");
+  const [rows, setRows] = useState(null);
+  const [checked, setChecked] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  const classOptions = useMemo(
+    () => (options.classes || []).map((item) => ({
+      value: String(item.id),
+      label: `${item.namaKelas} — ${item.tahunAjaran || "?"}`,
+    })),
+    [options.classes],
+  );
+
+  const load = useCallback(async () => {
+    if (!fromClassId) {
+      setRows(null);
+      return;
+    }
+    try {
+      const res = await apiFetch(withQuery("/promotion/students", { classId: fromClassId }));
+      setRows(res.data || []);
+    } catch (err) {
+      show(err.message || "Gagal memuat daftar siswa", "error");
+      setRows([]);
+    }
+  }, [fromClassId]);
+
+  useEffect(() => {
+    setChecked([]);
+    load();
+  }, [load]);
+
+  // Siswa yang sudah diproses (bukan lagi anggota aktif) tidak ikut dicentang.
+  const selectable = useMemo(
+    () => (rows || []).filter((row) => row.statusKeanggotaan === "Aktif"),
+    [rows],
+  );
+  const allChecked = selectable.length > 0 && checked.length === selectable.length;
+
+  const toggleAll = () =>
+    setChecked(allChecked ? [] : selectable.map((row) => Number(row.siswaId)));
+
+  const toggleOne = (siswaId) =>
+    setChecked((current) =>
+      current.includes(Number(siswaId))
+        ? current.filter((id) => id !== Number(siswaId))
+        : [...current, Number(siswaId)],
+    );
+
+  const submit = async () => {
+    if (!checked.length) {
+      show("Pilih minimal satu siswa", "error");
+      return;
+    }
+    if (status !== "Lulus" && !toClassId) {
+      show("Kelas tujuan wajib dipilih", "error");
+      return;
+    }
+    const namaTujuan = classOptions.find((item) => item.value === String(toClassId))?.label;
+    const konfirmasi = status === "Lulus"
+      ? `Luluskan ${checked.length} siswa? Nilai dan riwayat kelasnya tetap tersimpan.`
+      : `Proses ${checked.length} siswa (${promotionStatusMeta[status].label}) ke ${namaTujuan}?`;
+    if (!window.confirm(konfirmasi)) return;
+
+    setSaving(true);
+    try {
+      const res = await apiFetch("/promotion", {
+        method: "POST",
+        body: {
+          fromClassId,
+          toClassId: status === "Lulus" ? null : toClassId,
+          status,
+          siswaIds: checked,
+        },
+      });
+      show(`${res.diproses} siswa berhasil diproses (${promotionStatusMeta[status].label})`);
+      setChecked([]);
+      await load();
+    } catch (err) {
+      show(err.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const columns = [
+    {
+      key: "pilih",
+      header: (
+        <label className="flex items-center gap-2 normal-case">
+          <input
+            type="checkbox"
+            checked={allChecked}
+            onChange={toggleAll}
+            disabled={!selectable.length}
+            className="h-4 w-4 rounded border-input"
+          />
+          Semua
+        </label>
+      ),
+      render: (row) => (
+        <input
+          type="checkbox"
+          checked={checked.includes(Number(row.siswaId))}
+          onChange={() => toggleOne(row.siswaId)}
+          disabled={row.statusKeanggotaan !== "Aktif"}
+          className="h-4 w-4 rounded border-input"
+        />
+      ),
+    },
+    { key: "namaSiswa", header: "Nama Siswa" },
+    { key: "nis", header: "NIS" },
+    {
+      key: "statusKeanggotaan",
+      header: "Status di Kelas Ini",
+      render: (row) => (
+        <Badge tone={membershipTones[row.statusKeanggotaan] || "muted"}>
+          {row.statusKeanggotaan}
+        </Badge>
+      ),
+    },
+    {
+      key: "kelasAktif",
+      header: "Kelas Aktif Sekarang",
+      render: (row) => row.kelasAktif || <span className="text-xs text-muted-foreground">Tanpa kelas</span>,
+    },
+  ];
+
+  return (
+    <div>
+      {node}
+      <PageHeader
+        title="Kenaikan Kelas"
+        description="Naikkan, tinggalkan, atau luluskan siswa satu kelas sekaligus."
+      />
+
+      <div className="mb-4 grid gap-3 md:grid-cols-3">
+        <Field label="Kelas Asal">
+          <SearchableSelect
+            value={fromClassId}
+            onChange={(value) => {
+              setFromClassId(value);
+              setChecked([]);
+            }}
+            options={classOptions}
+            placeholder="Pilih kelas asal..."
+          />
+        </Field>
+        <Field label="Proses">
+          <Select value={status} onChange={(e) => setStatus(e.target.value)}>
+            {Object.entries(promotionStatusMeta).map(([value, meta]) => (
+              <option key={value} value={value}>
+                {meta.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {status !== "Lulus" ? (
+          <Field label="Kelas Tujuan">
+            <SearchableSelect
+              value={toClassId}
+              onChange={setToClassId}
+              options={classOptions.filter((item) => item.value !== String(fromClassId))}
+              placeholder="Pilih kelas tujuan..."
+            />
+          </Field>
+        ) : null}
+      </div>
+
+      <div className="mb-4 rounded-lg border bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
+        {promotionStatusMeta[status].hint} Nilai, tugas, dan ujian di kelas lama
+        tidak ikut berpindah dan tetap bisa dibuka guru maupun siswanya.
+      </div>
+
+      {!fromClassId ? (
+        <div className="flex min-h-48 items-center justify-center rounded-xl border bg-card text-sm text-muted-foreground">
+          Pilih kelas asal untuk melihat daftar siswa
+        </div>
+      ) : rows === null ? (
+        <LoadingBlock />
+      ) : (
+        <div className="space-y-4">
+          <Table rows={rows} columns={columns} empty="Kelas ini belum punya siswa" />
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">
+              {checked.length} dari {selectable.length} siswa aktif terpilih
+            </span>
+            <Button onClick={submit} disabled={saving || !checked.length}>
+              <TrendingUp className="h-4 w-4" />
+              {saving ? "Memproses..." : `Proses ${promotionStatusMeta[status].label}`}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StaffCurriculumPage() {
   const { show, node } = useToast();
   const [rows, setRows] = useState(null);
@@ -4323,13 +4924,17 @@ function StaffCurriculumPage() {
   }, [load]);
 
   const add = async () => {
-    await apiFetch("/staff-curriculum", {
-      method: "POST",
-      body: { userId: selected },
-    });
-    show("Staff kurikulum berhasil ditambahkan");
-    setSelected("");
-    await load();
+    try {
+      await apiFetch("/staff-curriculum", {
+        method: "POST",
+        body: { userId: selected },
+      });
+      show("Wakasek kurikulum berhasil ditambahkan");
+      setSelected("");
+      await load();
+    } catch (err) {
+      show(err.message || "Gagal menambahkan wakasek kurikulum", "error");
+    }
   };
 
   return (
@@ -4337,7 +4942,7 @@ function StaffCurriculumPage() {
       {node}
       <PageHeader
         title="Daftar Staff Kurikulum"
-        description="Admin mengatur siapa saja yang punya akses staff kurikulum."
+        description="Jabatan wakasek kurikulum, bukan penggantian role: guru yang menjabat tetap mengajar kelasnya dan memperoleh akses kurikulum sekaligus."
       />
       <Card className="mb-4">
         <CardContent className="grid gap-3 pt-5 md:grid-cols-[1fr_auto]">
@@ -4363,6 +4968,15 @@ function StaffCurriculumPage() {
           rows={rows}
           columns={[
             { key: "nama", header: "Nama" },
+            {
+              key: "role",
+              header: "Role",
+              render: (row) => (
+                <Badge tone={roleTones[row.role] || "muted"}>
+                  {roleLabels[row.role] || row.role}
+                </Badge>
+              ),
+            },
             { key: "email", header: "Email" },
             {
               key: "assignedAt",
@@ -4377,10 +4991,16 @@ function StaffCurriculumPage() {
                   variant="destructive"
                   size="sm"
                   onClick={async () => {
-                    await apiFetch(`/staff-curriculum/${row.id}`, {
-                      method: "DELETE",
-                    });
-                    await load();
+                    if (!window.confirm(`Cabut jabatan wakasek kurikulum ${row.nama}?`)) return;
+                    try {
+                      await apiFetch(`/staff-curriculum/${row.id}`, {
+                        method: "DELETE",
+                      });
+                      show("Jabatan wakasek kurikulum dicabut");
+                      await load();
+                    } catch (err) {
+                      show(err.message || "Gagal mencabut jabatan", "error");
+                    }
                   }}
                 >
                   Hapus
@@ -4393,8 +5013,6 @@ function StaffCurriculumPage() {
     </div>
   );
 }
-
-const roleTones = { admin: "danger", staff: "warning", guru: "default", siswa: "muted" };
 
 function UserManagementPage() {
   const { user: currentUser } = useAuth();
@@ -5054,6 +5672,14 @@ function AppRoutes() {
           }
         />
         <Route
+          path="kenaikanKelas"
+          element={
+            <RoleGate allow={["staff"]}>
+              <PromotionPage />
+            </RoleGate>
+          }
+        />
+        <Route
           path="rangeNilaiKategori"
           element={
             <RoleGate allow={["staff"]}>
@@ -5174,10 +5800,26 @@ function AppRoutes() {
           }
         />
         <Route
+          path="nilaiSiswa"
+          element={
+            <RoleGate allow={["siswa"]}>
+              <StudentGradesPage />
+            </RoleGate>
+          }
+        />
+        <Route
           path="pengumumanSiswa"
           element={
             <RoleGate allow={["siswa"]}>
-              <AnnouncementsPage role="siswa" />
+              <AnnouncementsPage />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="pengumuman"
+          element={
+            <RoleGate allow={["admin", "staff", "guru"]}>
+              <AnnouncementsPage />
             </RoleGate>
           }
         />

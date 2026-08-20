@@ -227,11 +227,14 @@ async function auth(req, res, next) {
   try {
     const decoded = jwt.verify(token, jwtSecret);
     const user = await one(
-      "SELECT * FROM users WHERE id = ? AND deleted_at IS NULL",
+      `SELECT u.*, (sc.user_id IS NOT NULL) AS wakasekKurikulum
+       FROM users u
+       LEFT JOIN staff_curriculum sc ON sc.user_id = u.id
+       WHERE u.id = ? AND u.deleted_at IS NULL`,
       [decoded.id]
     );
     if (!user) return res.status(401).json({ message: "User tidak valid" });
-    req.user = user;
+    req.user = { ...user, wakasekKurikulum: Boolean(user.wakasekKurikulum) };
     next();
   } catch {
     return res.status(401).json({ message: "Token tidak valid" });
@@ -241,9 +244,34 @@ async function auth(req, res, next) {
 // Jenis penilaian yang boleh diakses guru.
 const GURU_GRADE_TYPES = ["assignments", "sumative", "exam", "final"];
 
+// Jabatan wakasek kurikulum tidak menggantikan role: seorang guru yang
+// menjabat wakasek tetap ber-role "guru", tapi memperoleh seluruh akses staff
+// kurikulum. Dua helper di bawah dipakai untuk membedakan keduanya.
+// Flag jabatan hanya diakui bila role-nya memang guru atau staff, supaya baris
+// staff_curriculum yang tertinggal tidak pernah bisa menaikkan hak siswa.
+function memegangJabatanKurikulum(user) {
+  return (
+    Boolean(user.wakasekKurikulum)
+    && (user.role === "guru" || user.role === "staff")
+  );
+}
+
+function isKurikulum(user) {
+  return user.role === "admin" || user.role === "staff" || memegangJabatanKurikulum(user);
+}
+
+// "Guru murni" = guru tanpa jabatan kurikulum. Semua pembatasan khas guru
+// (hanya kelas yang diampu, hanya 4 jenis penilaian) memakai helper ini.
+function isPlainGuru(user) {
+  return user.role === "guru" && !memegangJabatanKurikulum(user);
+}
+
 function requireRole(...roles) {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
+    const granted =
+      roles.includes(req.user.role)
+      || (roles.includes("staff") && memegangJabatanKurikulum(req.user));
+    if (!granted) {
       return res.status(403).json({ message: "Akses role tidak diizinkan" });
     }
     next();
@@ -264,6 +292,30 @@ async function paged(req, baseSql, countSql, params = []) {
   };
 }
 
+// siswa_profiles.kelas_id dan class_students harus selalu sejalan: setiap kali
+// kelas aktif seorang siswa di-set, catat juga keanggotaannya di riwayat.
+async function syncClassMembership(siswaUserId, classId, connection = null) {
+  const run = connection
+    ? (sql, params) => connection.execute(sql, params)
+    : (sql, params) => q(sql, params);
+  // Seorang siswa hanya boleh punya satu kelas aktif. Keanggotaan aktif di
+  // kelas lain ditandai "Pindah" — bukan dihapus, supaya nilainya tetap
+  // terbaca. Status hasil kenaikan kelas (Naik/Tinggal/Lulus) tidak tersentuh
+  // karena hanya baris berstatus "Aktif" yang diubah.
+  await run(
+    `UPDATE class_students SET status = 'Pindah'
+     WHERE siswa_user_id = ? AND status = 'Aktif' AND class_id <> ?`,
+    [siswaUserId, classId || 0]
+  );
+  if (!classId) return;
+  await run(
+    `INSERT INTO class_students (class_id, siswa_user_id, academic_year_id, status)
+     SELECT c.id, ?, c.academic_year_id, 'Aktif' FROM classes c WHERE c.id = ?
+     ON DUPLICATE KEY UPDATE status = 'Aktif'`,
+    [siswaUserId, classId]
+  );
+}
+
 async function activeAcademicYearId() {
   const active = await one("SELECT id FROM academic_years WHERE is_active = 1");
   return active?.id || null;
@@ -277,7 +329,10 @@ app.get("/api/health", asyncHandler(async (_req, res) => {
 app.post("/api/auth/login", asyncHandler(async (req, res) => {
   const { identifier, password } = req.body;
   const user = await one(
-    "SELECT * FROM users WHERE identifier = ? AND deleted_at IS NULL",
+    `SELECT u.*, (sc.user_id IS NOT NULL) AS wakasekKurikulum
+     FROM users u
+     LEFT JOIN staff_curriculum sc ON sc.user_id = u.id
+     WHERE u.identifier = ? AND u.deleted_at IS NULL`,
     [identifier]
   );
   if (!user) return res.status(401).json({ message: "Akun tidak ditemukan" });
@@ -290,7 +345,10 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
   if (!valid) return res.status(401).json({ message: "Password salah" });
 
   await logActivity(user.id, "Login", "auth", user.id, `${user.nama} masuk`);
-  res.json({ token: signToken(user), user: publicUser(user) });
+  res.json({
+    token: signToken(user),
+    user: { ...publicUser(user), wakasekKurikulum: Boolean(user.wakasekKurikulum) },
+  });
 }));
 
 app.post("/api/auth/forgot-password", asyncHandler(async (req, res) => {
@@ -531,9 +589,23 @@ app.put("/api/users/:id/role", auth, requireRole("admin"), asyncHandler(async (r
     // supaya user tidak ikut terhitung di rombel / daftar guru role lain.
     if (user.role === "siswa") {
       await connection.execute("UPDATE siswa_profiles SET kelas_id = NULL WHERE user_id = ?", [targetId]);
+      // Riwayat kelas tetap tersimpan, tapi tidak lagi dihitung sebagai anggota
+      // aktif rombel mana pun.
+      await connection.execute(
+        "UPDATE class_students SET status = 'Pindah' WHERE siswa_user_id = ? AND status = 'Aktif'",
+        [targetId]
+      );
     }
     if (user.role === "guru") {
       await connection.execute("DELETE FROM guru_subjects WHERE guru_user_id = ?", [targetId]);
+    }
+    // Jabatan wakasek kurikulum melekat pada guru/staff. Begitu role-nya keluar
+    // dari dua itu, jabatannya ikut dicabut agar aksesnya tidak menggantung.
+    if (role !== "guru" && role !== "staff") {
+      await connection.execute("DELETE FROM staff_curriculum WHERE user_id = ?", [targetId]);
+    }
+    if (newProfile?.type === "siswa" && newProfile.kelasId) {
+      await syncClassMembership(targetId, newProfile.kelasId, connection);
     }
   });
 
@@ -558,15 +630,21 @@ app.get("/api/options", auth, asyncHandler(async (req, res) => {
     teachers,
     students,
     classSubjects,
+    teachingClassSubjects,
     waliCandidates,
   ] = await Promise.all([
     q("SELECT id, tahun_ajaran AS tahunAjaran, is_active AS isActive FROM academic_years ORDER BY tahun_ajaran DESC"),
     q("SELECT s.id, s.academic_year_id AS academicYearId, s.judul_semester AS judulSemester, s.is_active AS isActive FROM semesters s ORDER BY s.academic_year_id DESC, s.id"),
-    q("SELECT id, nama_kelas AS namaKelas, jenjang, jurusan, ruang_kelas AS ruangKelas FROM classes WHERE deleted_at IS NULL ORDER BY nama_kelas"),
+    q(`SELECT c.id, c.nama_kelas AS namaKelas, c.jenjang, c.jurusan, c.ruang_kelas AS ruangKelas,
+              c.academic_year_id AS academicYearId, ay.tahun_ajaran AS tahunAjaran
+       FROM classes c
+       JOIN academic_years ay ON ay.id = c.academic_year_id
+       WHERE c.deleted_at IS NULL
+       ORDER BY ay.tahun_ajaran DESC, c.nama_kelas`),
     q("SELECT id, judul_mapel AS judulMapel, jenjang, jurusan FROM subjects WHERE deleted_at IS NULL ORDER BY judul_mapel"),
     q("SELECT u.id, u.nama, gp.nip_nuptk AS nipNuptk FROM users u JOIN guru_profiles gp ON gp.user_id = u.id WHERE u.role = 'guru' AND u.deleted_at IS NULL ORDER BY u.nama"),
     q("SELECT u.id, u.nama, sp.nis, sp.nisn, sp.kelas_id AS kelasId FROM users u JOIN siswa_profiles sp ON sp.user_id = u.id WHERE u.role = 'siswa' AND u.deleted_at IS NULL ORDER BY u.nama"),
-    req.user.role === "guru"
+    isPlainGuru(req.user)
       ? q(`SELECT cs.id, cs.class_id AS classId, cs.subject_id AS subjectId,
                   cs.academic_year_id AS academicYearId, ay.tahun_ajaran AS tahunAjaran,
                   c.nama_kelas AS namaKelas, s.judul_mapel AS judulMapel, u.nama AS guruPengampu
@@ -586,6 +664,20 @@ app.get("/api/options", auth, asyncHandler(async (req, res) => {
            JOIN users u ON u.id = cs.guru_user_id
            JOIN academic_years ay ON ay.id = cs.academic_year_id
            ORDER BY c.nama_kelas, s.judul_mapel`),
+    // Kelas-mapel yang benar-benar diampu sendiri. Dibutuhkan terpisah karena
+    // guru yang menjabat wakasek kurikulum menerima classSubjects se-sekolah.
+    req.user.role === "guru"
+      ? q(`SELECT cs.id, cs.class_id AS classId, cs.subject_id AS subjectId,
+                  cs.academic_year_id AS academicYearId, ay.tahun_ajaran AS tahunAjaran,
+                  c.nama_kelas AS namaKelas, s.judul_mapel AS judulMapel, u.nama AS guruPengampu
+           FROM class_subjects cs
+           JOIN classes c ON c.id = cs.class_id
+           JOIN subjects s ON s.id = cs.subject_id
+           JOIN users u ON u.id = cs.guru_user_id
+           JOIN academic_years ay ON ay.id = cs.academic_year_id
+           WHERE cs.guru_user_id = ?
+           ORDER BY c.nama_kelas, s.judul_mapel`, [req.user.id])
+      : Promise.resolve([]),
     q("SELECT u.id, u.nama FROM users u WHERE u.role IN ('guru', 'staff') AND u.deleted_at IS NULL ORDER BY u.nama"),
   ]);
 
@@ -597,6 +689,7 @@ app.get("/api/options", auth, asyncHandler(async (req, res) => {
     teachers,
     students,
     classSubjects,
+    teachingClassSubjects,
     waliCandidates,
   });
 }));
@@ -816,6 +909,7 @@ app.post("/api/students", auth, requireRole("admin", "staff"), asyncHandler(asyn
         statusWaliMurid,
       ]
     );
+    await syncClassMembership(userId, numberOrNull(kelasId), connection);
     return userId;
   });
   await logActivity(req.user.id, "Tambah siswa", "users", id, nama);
@@ -856,6 +950,7 @@ app.post("/api/students/bulk", auth, requireRole("admin", "staff"), asyncHandler
         "INSERT INTO siswa_profiles (user_id, nis, nisn, kelas_id) VALUES (?, ?, ?, ?)",
         [userResult.insertId, row.nis, row.nisn, kelas?.id || null]
       );
+      await syncClassMembership(userResult.insertId, kelas?.id || null, connection);
     });
     inserted += 1;
   }
@@ -899,6 +994,7 @@ app.put("/api/students/:id", auth, requireRole("admin", "staff"), asyncHandler(a
         req.params.id,
       ]
     );
+    await syncClassMembership(Number(req.params.id), numberOrNull(kelasId), connection);
   });
   await logActivity(req.user.id, "Ubah siswa", "users", req.params.id, nama);
   res.json({ ok: true });
@@ -938,11 +1034,11 @@ app.get("/api/classes", auth, asyncHandler(async (req, res) => {
     `SELECT c.id, c.academic_year_id AS academicYearId, ay.tahun_ajaran AS tahunAjaran,
             c.jenjang, c.jurusan, c.nama_kelas AS namaKelas, c.ruang_kelas AS ruangKelas,
             c.wali_kelas_user_id AS waliKelasUserId, u.nama AS waliKelas,
-            COUNT(sp.user_id) AS jumlahSiswa
+            COUNT(cst.siswa_user_id) AS jumlahSiswa
      FROM classes c
      JOIN academic_years ay ON ay.id = c.academic_year_id
      LEFT JOIN users u ON u.id = c.wali_kelas_user_id
-     LEFT JOIN siswa_profiles sp ON sp.kelas_id = c.id
+     LEFT JOIN class_students cst ON cst.class_id = c.id
      WHERE ${where}
      GROUP BY c.id
      ORDER BY c.nama_kelas`,
@@ -1181,6 +1277,13 @@ app.delete("/api/academic-events/:id", auth, requireRole("admin", "staff"), asyn
 }));
 
 app.get("/api/class-subjects", auth, asyncHandler(async (req, res) => {
+  const isSiswa = req.user.role === "siswa";
+  // Status keanggotaan dipakai UI siswa untuk menandai kelas arsip.
+  const statusColumn = isSiswa
+    ? `(SELECT cst.status FROM class_students cst
+        WHERE cst.class_id = cs.class_id AND cst.siswa_user_id = ?) AS statusKeanggotaan`
+    : "NULL AS statusKeanggotaan";
+  const selectParams = isSiswa ? [req.user.id] : [];
   const params = [];
   const filters = [];
   if (req.query.academicYearId) {
@@ -1192,7 +1295,11 @@ app.get("/api/class-subjects", auth, asyncHandler(async (req, res) => {
     params.push(req.user.id);
   }
   if (req.user.role === "siswa") {
-    filters.push("cs.class_id = (SELECT kelas_id FROM siswa_profiles WHERE user_id = ?)");
+    // Termasuk kelas yang pernah ditempati, supaya nilai tahun-tahun
+    // sebelumnya tetap bisa dibuka setelah siswa naik kelas.
+    filters.push(
+      "cs.class_id IN (SELECT class_id FROM class_students WHERE siswa_user_id = ?)"
+    );
     params.push(req.user.id);
   }
   if (req.query.search) {
@@ -1202,8 +1309,10 @@ app.get("/api/class-subjects", auth, asyncHandler(async (req, res) => {
   const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
   const rows = await q(
     `SELECT cs.id, cs.class_id AS classId, cs.subject_id AS subjectId, cs.guru_user_id AS guruUserId,
+            cs.academic_year_id AS academicYearId, ay.tahun_ajaran AS tahunAjaran,
             c.nama_kelas AS namaKelas, c.jenjang, c.jurusan, c.ruang_kelas AS ruangKelas,
             s.judul_mapel AS judulMapel, g.nama AS guruPengampu,
+            ${statusColumn},
             (SELECT COUNT(*) FROM materials m WHERE m.class_subject_id = cs.id AND m.deleted_at IS NULL) AS jumlahMateri,
             (SELECT COUNT(*) FROM assignments a WHERE a.class_subject_id = cs.id AND a.deleted_at IS NULL) AS jumlahTugas,
             (SELECT COUNT(*) FROM exams e WHERE e.class_subject_id = cs.id AND e.deleted_at IS NULL) AS jumlahUjian,
@@ -1212,9 +1321,10 @@ app.get("/api/class-subjects", auth, asyncHandler(async (req, res) => {
      JOIN classes c ON c.id = cs.class_id
      JOIN subjects s ON s.id = cs.subject_id
      JOIN users g ON g.id = cs.guru_user_id
+     JOIN academic_years ay ON ay.id = cs.academic_year_id
      ${where}
-     ORDER BY c.nama_kelas, s.judul_mapel`,
-    params
+     ORDER BY ay.tahun_ajaran DESC, c.nama_kelas, s.judul_mapel`,
+    [...selectParams, ...params]
   );
   res.json({ total: rows.length, data: rows });
 }));
@@ -1296,10 +1406,11 @@ app.delete("/api/lesson-schedules/:id", auth, requireRole("admin", "staff"), asy
 app.get("/api/class-subjects/:id/students", auth, asyncHandler(async (req, res) => {
   const rows = await q(
     `SELECT u.id AS userIdSiswa, sp.user_id AS siswaId, sp.nis, sp.nisn, u.nama AS namaSiswa,
-            u.no_telp AS noTelpSiswa, u.email AS emailSiswa
+            u.no_telp AS noTelpSiswa, u.email AS emailSiswa, cst.status AS statusKeanggotaan
      FROM class_subjects cs
-     JOIN siswa_profiles sp ON sp.kelas_id = cs.class_id
-     JOIN users u ON u.id = sp.user_id
+     JOIN class_students cst ON cst.class_id = cs.class_id
+     JOIN users u ON u.id = cst.siswa_user_id
+     JOIN siswa_profiles sp ON sp.user_id = u.id
      WHERE cs.id = ? AND u.deleted_at IS NULL
      ORDER BY u.nama`,
     [req.params.id]
@@ -1330,13 +1441,17 @@ app.get("/api/rubrics", auth, asyncHandler(async (req, res) => {
   const rows = await q(
     `SELECT rs.id AS lingkupMateriId, rs.lingkup_materi AS lingkupMateri,
             rs.status_kunci AS statusKunci, rs.subject_id AS subjectId, rs.semester_id AS semesterId,
-            s.judul_mapel AS judulMapel, COUNT(lo.id) AS jumlahTP
+            s.judul_mapel AS judulMapel, sem.judul_semester AS judulSemester,
+            ay.id AS academicYearId, ay.tahun_ajaran AS tahunAjaran,
+            COUNT(lo.id) AS jumlahTP
      FROM rubric_scopes rs
      JOIN subjects s ON s.id = rs.subject_id
+     LEFT JOIN semesters sem ON sem.id = rs.semester_id
+     LEFT JOIN academic_years ay ON ay.id = sem.academic_year_id
      LEFT JOIN learning_objectives lo ON lo.rubric_scope_id = rs.id
      ${where}
      GROUP BY rs.id
-     ORDER BY rs.created_at DESC`,
+     ORDER BY ay.tahun_ajaran DESC, sem.judul_semester, rs.created_at DESC`,
     params
   );
   for (const row of rows) {
@@ -2036,7 +2151,7 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
   }
 
   // Guru hanya berwenang atas penilaian tugas, sumatif LM, ujian sumatif, dan nilai akhir.
-  if (req.user.role === "guru" && !GURU_GRADE_TYPES.includes(type)) {
+  if (isPlainGuru(req.user) && !GURU_GRADE_TYPES.includes(type)) {
     return res.status(403).json({ message: "Jenis penilaian ini tidak dapat diakses guru" });
   }
 
@@ -2049,7 +2164,7 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
   }
 
   // Guru hanya boleh lihat kelas yang diampunya sendiri.
-  if (req.user.role === "guru" && Number(classSubject.guruUserId) !== Number(req.user.id)) {
+  if (isPlainGuru(req.user) && Number(classSubject.guruUserId) !== Number(req.user.id)) {
     return res.status(403).json({ message: "Akses tidak diizinkan untuk kelas ini" });
   }
 
@@ -2064,12 +2179,14 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
     }
   }
 
-  // Ambil siswa sekali
+  // Ambil siswa sekali. Sumbernya riwayat keanggotaan, bukan kelas aktif,
+  // supaya rekap kelas lama tetap utuh setelah siswanya naik kelas.
   const students = await q(
-    `SELECT u.id AS siswaId, sp.nis, u.nama AS namaSiswa
+    `SELECT u.id AS siswaId, sp.nis, u.nama AS namaSiswa, cst.status AS statusKeanggotaan
      FROM class_subjects cs
-     JOIN siswa_profiles sp ON sp.kelas_id = cs.class_id
-     JOIN users u ON u.id = sp.user_id
+     JOIN class_students cst ON cst.class_id = cs.class_id
+     JOIN users u ON u.id = cst.siswa_user_id
+     JOIN siswa_profiles sp ON sp.user_id = u.id
      WHERE cs.id = ? AND u.deleted_at IS NULL
      ORDER BY u.nama`,
     [classSubjectId]
@@ -2192,9 +2309,302 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
   res.json({ data: result, total: result.length });
 }));
 
+// Rekap nilai untuk siswa — hanya nilai miliknya sendiri, selalu read-only.
+app.get("/api/siswa/grades", auth, requireRole("siswa"), asyncHandler(async (req, res) => {
+  const { classSubjectId, semesterId } = req.query;
+  if (!classSubjectId) {
+    return res.status(400).json({ message: "classSubjectId diperlukan" });
+  }
+
+  const classSubject = await one(
+    `SELECT cs.id, cs.class_id AS classId, cs.academic_year_id AS academicYearId,
+            c.nama_kelas AS namaKelas, s.judul_mapel AS judulMapel,
+            g.nama AS guruPengampu, ay.tahun_ajaran AS tahunAjaran
+     FROM class_subjects cs
+     JOIN classes c ON c.id = cs.class_id
+     JOIN subjects s ON s.id = cs.subject_id
+     JOIN users g ON g.id = cs.guru_user_id
+     JOIN academic_years ay ON ay.id = cs.academic_year_id
+     WHERE cs.id = ?`,
+    [classSubjectId]
+  );
+  if (!classSubject) {
+    return res.status(404).json({ message: "Kelas mata pelajaran tidak ditemukan" });
+  }
+  // Siswa boleh melihat nilai dari kelas mana pun yang pernah ia tempati,
+  // termasuk kelas tahun ajaran sebelumnya setelah ia naik kelas.
+  const keanggotaan = await one(
+    "SELECT status FROM class_students WHERE class_id = ? AND siswa_user_id = ?",
+    [classSubject.classId, req.user.id]
+  );
+  if (!keanggotaan) {
+    return res.status(403).json({ message: "Kelas ini bukan kelas Anda" });
+  }
+
+  let semester = null;
+  if (semesterId) {
+    semester = await one(
+      "SELECT id, judul_semester AS judulSemester FROM semesters WHERE id = ? AND academic_year_id = ?",
+      [semesterId, classSubject.academicYearId]
+    );
+    if (!semester) {
+      return res.status(400).json({ message: "Semester tidak sesuai dengan tahun ajaran kelas" });
+    }
+  }
+
+  const semesterFilter = semesterId ? "AND rs.semester_id = ?" : "";
+
+  const tugasParams = [req.user.id, classSubjectId];
+  if (semesterId) tugasParams.push(semesterId);
+  const tugas = await q(
+    `SELECT a.id, a.judul, a.deadline, lo.deskripsi AS tujuanPembelajaran,
+            sub.nilai, sub.feedback, sub.status AS statusPengumpulan
+     FROM assignments a
+     LEFT JOIN learning_objectives lo ON lo.id = a.learning_objective_id
+     LEFT JOIN rubric_scopes rs ON rs.id = lo.rubric_scope_id
+     LEFT JOIN assignment_submissions sub ON sub.assignment_id = a.id AND sub.siswa_user_id = ?
+     WHERE a.class_subject_id = ? AND a.deleted_at IS NULL AND a.status = 'Visible' ${semesterFilter}
+     ORDER BY a.deadline, a.created_at`,
+    tugasParams
+  );
+
+  const ujianParams = [req.user.id, classSubjectId];
+  if (semesterId) ujianParams.push(semesterId);
+  const ujian = await q(
+    `SELECT e.id, e.judul, e.tipe_ujian AS tipeUjian, e.tanggal_ujian AS tanggalUjian,
+            e.status_nilai AS statusNilai, lo.deskripsi AS tujuanPembelajaran,
+            (SELECT SUM(ea.nilai) FROM exam_answers ea
+              WHERE ea.exam_id = e.id AND ea.siswa_user_id = ?) AS nilai
+     FROM exams e
+     LEFT JOIN learning_objectives lo ON lo.id = e.learning_objective_id
+     LEFT JOIN rubric_scopes rs ON rs.id = lo.rubric_scope_id
+     WHERE e.class_subject_id = ? AND e.deleted_at IS NULL AND e.status_ujian = 'Visible' ${semesterFilter}
+     ORDER BY e.tanggal_ujian, e.created_at`,
+    ujianParams
+  );
+
+  const gradeRanges = await q(
+    "SELECT kategori, min_nilai AS minNilai, max_nilai AS maxNilai FROM grade_ranges ORDER BY min_nilai DESC"
+  );
+  const capaianOf = (score) => {
+    if (score === null || score === undefined) return "-";
+    const range = gradeRanges.find((r) => score >= r.minNilai && score <= r.maxNilai);
+    return range ? range.kategori : (score >= 75 ? "Baik" : "Perlu Bimbingan");
+  };
+
+  // Samakan tipe ujian dengan kategori penilaian yang dipakai di menu guru/staff.
+  const EXAM_KATEGORI = {
+    "Latihan Soal": "practice",
+    "Sumatif Lingkup Materi": "sumative",
+    STS: "exam",
+    SAS: "exam",
+  };
+
+  const items = [
+    ...tugas.map((row) => ({
+      id: `t_${row.id}`,
+      kategori: "assignments",
+      jenis: "Tugas",
+      judul: row.judul,
+      tujuanPembelajaran: row.tujuanPembelajaran,
+      tanggal: row.deadline,
+      nilai: numberOrNull(row.nilai),
+      feedback: row.feedback,
+      status: row.statusPengumpulan || "Belum dikumpulkan",
+    })),
+    ...ujian.map((row) => {
+      const nilai = numberOrNull(row.nilai);
+      const dirilis = row.statusNilai === "Visible";
+      return {
+        id: `u_${row.id}`,
+        kategori: EXAM_KATEGORI[row.tipeUjian] || "exam",
+        jenis: row.tipeUjian,
+        judul: row.judul,
+        tujuanPembelajaran: row.tujuanPembelajaran,
+        tanggal: row.tanggalUjian,
+        // Nilai ujian hanya tampil setelah guru merilisnya (status_nilai = Visible).
+        nilai: dirilis ? nilai : null,
+        feedback: null,
+        status: nilai === null
+          ? "Belum dikerjakan"
+          : dirilis ? "Dinilai" : "Menunggu rilis nilai",
+      };
+    }),
+  ];
+
+  const average = (values) => {
+    const filled = values.filter((value) => value !== null && value !== undefined);
+    if (!filled.length) return null;
+    return Number((filled.reduce((a, b) => a + Number(b), 0) / filled.length).toFixed(2));
+  };
+  const scoresOf = (kategori) =>
+    items.filter((item) => item.kategori === kategori).map((item) => item.nilai);
+
+  const nilaiAkhir = average(items.map((item) => item.nilai));
+
+  res.json({
+    classSubject: { ...classSubject, statusKeanggotaan: keanggotaan.status },
+    semester,
+    items,
+    rekap: {
+      rataTugas: average(scoresOf("assignments")),
+      rataLatihanSoal: average(scoresOf("practice")),
+      rataSumatif: average(scoresOf("sumative")),
+      rataUjian: average(scoresOf("exam")),
+      nilaiAkhir,
+      capaian: capaianOf(nilaiAkhir),
+      jumlahBelumDinilai: items.filter((item) => item.nilai === null).length,
+    },
+  });
+}));
+
+
+// ==========================================================================
+// Kenaikan Kelas
+// ==========================================================================
+const PROMOTION_STATUS = ["Naik", "Tinggal", "Lulus"];
+
+// Anggota satu kelas beserta status keanggotaannya — sumber data tabel centang
+// pada halaman Kenaikan Kelas.
+app.get("/api/promotion/students", auth, requireRole("admin", "staff"), asyncHandler(async (req, res) => {
+  const { classId } = req.query;
+  if (!classId) {
+    return res.status(400).json({ message: "classId diperlukan" });
+  }
+  const rows = await q(
+    `SELECT u.id AS siswaId, u.nama AS namaSiswa, sp.nis, sp.nisn,
+            cst.status AS statusKeanggotaan,
+            sp.kelas_id AS kelasAktifId, c.nama_kelas AS kelasAktif
+     FROM class_students cst
+     JOIN users u ON u.id = cst.siswa_user_id
+     JOIN siswa_profiles sp ON sp.user_id = u.id
+     LEFT JOIN classes c ON c.id = sp.kelas_id
+     WHERE cst.class_id = ? AND u.deleted_at IS NULL
+     ORDER BY u.nama`,
+    [classId]
+  );
+  res.json({ data: rows, total: rows.length });
+}));
+
+// Riwayat kelas satu siswa (kelas lama tetap tercatat setelah naik kelas).
+app.get("/api/students/:id/class-history", auth, asyncHandler(async (req, res) => {
+  const siswaId = Number(req.params.id);
+  if (req.user.role === "siswa" && siswaId !== Number(req.user.id)) {
+    return res.status(403).json({ message: "Akses tidak diizinkan" });
+  }
+  if (req.user.role === "guru" && !req.user.wakasekKurikulum) {
+    return res.status(403).json({ message: "Akses tidak diizinkan" });
+  }
+  const rows = await q(
+    `SELECT cst.class_id AS classId, c.nama_kelas AS namaKelas, c.jenjang, c.jurusan,
+            cst.status, ay.id AS academicYearId, ay.tahun_ajaran AS tahunAjaran
+     FROM class_students cst
+     JOIN classes c ON c.id = cst.class_id
+     JOIN academic_years ay ON ay.id = cst.academic_year_id
+     WHERE cst.siswa_user_id = ?
+     ORDER BY ay.tahun_ajaran DESC, c.nama_kelas`,
+    [siswaId]
+  );
+  res.json({ data: rows, total: rows.length });
+}));
+
+// Proses kenaikan kelas massal. Keanggotaan kelas lama tidak dihapus — hanya
+// diberi status akhir — sehingga seluruh nilai di kelas itu tetap terbaca.
+app.post("/api/promotion", auth, requireRole("admin", "staff"), asyncHandler(async (req, res) => {
+  const { fromClassId, toClassId, status = "Naik" } = req.body;
+  const siswaIds = [...new Set((req.body.siswaIds || []).map(Number).filter(Boolean))];
+
+  if (!PROMOTION_STATUS.includes(status)) {
+    return res.status(400).json({ message: "Status kenaikan tidak dikenal" });
+  }
+  if (!fromClassId) {
+    return res.status(400).json({ message: "Kelas asal wajib dipilih" });
+  }
+  if (!siswaIds.length) {
+    return res.status(400).json({ message: "Pilih minimal satu siswa" });
+  }
+  if (status !== "Lulus" && !toClassId) {
+    return res.status(400).json({ message: "Kelas tujuan wajib dipilih" });
+  }
+  if (status !== "Lulus" && Number(toClassId) === Number(fromClassId)) {
+    return res.status(400).json({ message: "Kelas tujuan tidak boleh sama dengan kelas asal" });
+  }
+
+  const fromClass = await one(
+    "SELECT id, nama_kelas AS namaKelas FROM classes WHERE id = ? AND deleted_at IS NULL",
+    [fromClassId]
+  );
+  if (!fromClass) {
+    return res.status(404).json({ message: "Kelas asal tidak ditemukan" });
+  }
+
+  let toClass = null;
+  if (status !== "Lulus") {
+    toClass = await one(
+      `SELECT id, nama_kelas AS namaKelas, academic_year_id AS academicYearId
+       FROM classes WHERE id = ? AND deleted_at IS NULL`,
+      [toClassId]
+    );
+    if (!toClass) {
+      return res.status(404).json({ message: "Kelas tujuan tidak ditemukan" });
+    }
+  }
+
+  const placeholders = siswaIds.map(() => "?").join(",");
+  const members = await q(
+    `SELECT siswa_user_id FROM class_students
+     WHERE class_id = ? AND siswa_user_id IN (${placeholders})`,
+    [fromClassId, ...siswaIds]
+  );
+  if (members.length !== siswaIds.length) {
+    return res.status(400).json({ message: "Ada siswa yang bukan anggota kelas asal" });
+  }
+
+  await tx(async (connection) => {
+    await connection.execute(
+      `UPDATE class_students SET status = ?
+       WHERE class_id = ? AND siswa_user_id IN (${placeholders})`,
+      [status, fromClassId, ...siswaIds]
+    );
+
+    if (toClass) {
+      const values = siswaIds.map(() => "(?, ?, ?, 'Aktif')").join(", ");
+      const params = [];
+      for (const siswaId of siswaIds) {
+        params.push(toClass.id, siswaId, toClass.academicYearId);
+      }
+      await connection.execute(
+        `INSERT INTO class_students (class_id, siswa_user_id, academic_year_id, status)
+         VALUES ${values}
+         ON DUPLICATE KEY UPDATE status = 'Aktif'`,
+        params
+      );
+      await connection.execute(
+        `UPDATE siswa_profiles SET kelas_id = ? WHERE user_id IN (${placeholders})`,
+        [toClass.id, ...siswaIds]
+      );
+    } else {
+      // Lulus: tidak lagi punya kelas aktif, riwayatnya tetap tersimpan.
+      await connection.execute(
+        `UPDATE siswa_profiles SET kelas_id = NULL WHERE user_id IN (${placeholders})`,
+        siswaIds
+      );
+    }
+  });
+
+  await logActivity(
+    req.user.id,
+    "Proses kenaikan kelas",
+    "class_students",
+    fromClass.id,
+    `${siswaIds.length} siswa ${status.toLowerCase()} dari ${fromClass.namaKelas}${toClass ? ` ke ${toClass.namaKelas}` : ""}`
+  );
+  res.json({ ok: true, diproses: siswaIds.length, status });
+}));
+
 app.get("/api/staff-curriculum", auth, requireRole("admin"), asyncHandler(async (_req, res) => {
   const rows = await q(
-    `SELECT u.id, u.nama, u.email, u.no_telp AS noTelp, sc.assigned_at AS assignedAt
+    `SELECT u.id, u.nama, u.email, u.no_telp AS noTelp, u.role, sc.assigned_at AS assignedAt
      FROM staff_curriculum sc JOIN users u ON u.id = sc.user_id
      ORDER BY sc.assigned_at DESC`
   );
@@ -2213,11 +2623,27 @@ app.get("/api/staff-curriculum/candidates", auth, requireRole("admin"), asyncHan
 }));
 
 app.post("/api/staff-curriculum", auth, requireRole("admin"), asyncHandler(async (req, res) => {
-  await q("INSERT IGNORE INTO staff_curriculum (user_id) VALUES (?)", [
-    req.body.userId,
-  ]);
-  await q("UPDATE users SET role = 'staff' WHERE id = ?", [req.body.userId]);
-  await logActivity(req.user.id, "Tambah staff kurikulum", "staff_curriculum", req.body.userId);
+  const target = await one(
+    "SELECT id, nama, role FROM users WHERE id = ? AND deleted_at IS NULL",
+    [req.body.userId]
+  );
+  if (!target) {
+    return res.status(404).json({ message: "User tidak ditemukan" });
+  }
+  if (target.role !== "guru" && target.role !== "staff") {
+    return res.status(400).json({ message: "Hanya guru atau staff yang bisa menjabat wakasek kurikulum" });
+  }
+  // Role sengaja TIDAK diubah: guru yang menjabat wakasek tetap ber-role guru
+  // supaya kelas, rubrik, dan penilaiannya tidak ikut hilang. Akses kurikulum
+  // diberikan lewat flag jabatan ini (lihat isKurikulum/requireRole).
+  await q("INSERT IGNORE INTO staff_curriculum (user_id) VALUES (?)", [target.id]);
+  await logActivity(
+    req.user.id,
+    "Tambah staff kurikulum",
+    "staff_curriculum",
+    target.id,
+    `${target.nama} (${target.role})`
+  );
   res.status(201).json({ ok: true });
 }));
 
@@ -2300,8 +2726,9 @@ app.get("/api/guru/dashboard", auth, requireRole("guru"), asyncHandler(async (re
   ] = await Promise.all([
     one("SELECT COUNT(DISTINCT class_id) AS total FROM class_subjects WHERE guru_user_id = ?", [gid]),
     one(
-      `SELECT COUNT(DISTINCT sp.user_id) AS total FROM siswa_profiles sp
-       WHERE sp.kelas_id IN (SELECT class_id FROM class_subjects WHERE guru_user_id = ?)`,
+      `SELECT COUNT(DISTINCT cst.siswa_user_id) AS total FROM class_students cst
+       WHERE cst.status = 'Aktif'
+         AND cst.class_id IN (SELECT class_id FROM class_subjects WHERE guru_user_id = ?)`,
       [gid]
     ),
     one(
@@ -2336,7 +2763,7 @@ app.get("/api/guru/dashboard", auth, requireRole("guru"), asyncHandler(async (re
     ),
     q(
       `SELECT cs.id AS classSubjectId, c.nama_kelas AS namaKelas, sub.judul_mapel AS judulMapel,
-        (SELECT COUNT(*) FROM siswa_profiles sp WHERE sp.kelas_id = cs.class_id) AS totalSiswa,
+        (SELECT COUNT(*) FROM class_students cst WHERE cst.class_id = cs.class_id AND cst.status = 'Aktif') AS totalSiswa,
         (SELECT COUNT(*) FROM assignments a WHERE a.class_subject_id = cs.id AND a.deleted_at IS NULL) AS totalTugas,
         (SELECT ROUND(AVG(s.nilai), 1) FROM assignment_submissions s
            JOIN assignments a ON a.id = s.assignment_id
@@ -2368,7 +2795,7 @@ app.get("/api/guru/dashboard", auth, requireRole("guru"), asyncHandler(async (re
     q(
       `SELECT a.id, a.judul, a.deadline, c.nama_kelas AS namaKelas, sub.judul_mapel AS judulMapel,
         (SELECT COUNT(*) FROM assignment_submissions s WHERE s.assignment_id = a.id) AS totalSubmit,
-        (SELECT COUNT(*) FROM siswa_profiles sp WHERE sp.kelas_id = cs.class_id) AS totalSiswa
+        (SELECT COUNT(*) FROM class_students cst WHERE cst.class_id = cs.class_id AND cst.status = 'Aktif') AS totalSiswa
        FROM assignments a
        JOIN class_subjects cs ON cs.id = a.class_subject_id
        JOIN classes c ON c.id = cs.class_id
@@ -2436,23 +2863,40 @@ app.get("/api/guru/dashboard", auth, requireRole("guru"), asyncHandler(async (re
 // ==========================================================================
 // Pengumuman & Notifikasi
 // ==========================================================================
-async function fanoutAnnouncement(announcementId, classSubjectId, judul, authorNama) {
-  const students = await q(
-    `SELECT sp.user_id FROM siswa_profiles sp
-     JOIN class_subjects cs ON cs.class_id = sp.kelas_id
-     WHERE cs.id = ?`,
+// Daftar penerima notifikasi ditentukan oleh sasaran pengumuman.
+async function announcementRecipients(sasaran, classSubjectId, authorUserId) {
+  if (sasaran === "semua") {
+    return q(
+      "SELECT id AS user_id, role FROM users WHERE deleted_at IS NULL AND id <> ?",
+      [authorUserId]
+    );
+  }
+  if (sasaran === "siswa") {
+    return q(
+      "SELECT id AS user_id, role FROM users WHERE role = 'siswa' AND deleted_at IS NULL"
+    );
+  }
+  return q(
+    `SELECT u.id AS user_id, u.role FROM class_students cst
+     JOIN class_subjects cs ON cs.class_id = cst.class_id
+     JOIN users u ON u.id = cst.siswa_user_id
+     WHERE cs.id = ? AND cst.status = 'Aktif' AND u.deleted_at IS NULL`,
     [classSubjectId]
   );
-  if (!students.length) return 0;
-  const placeholders = students.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+}
+
+async function fanoutAnnouncement(announcementId, sasaran, classSubjectId, judul, authorNama, authorUserId) {
+  const recipients = await announcementRecipients(sasaran, classSubjectId, authorUserId);
+  if (!recipients.length) return 0;
+  const placeholders = recipients.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
   const params = [];
-  for (const s of students) {
+  for (const person of recipients) {
     params.push(
-      s.user_id,
+      person.user_id,
       "announcement",
       `Pengumuman: ${judul}`,
       `${authorNama} membagikan pengumuman baru.`,
-      "/main/pengumumanSiswa",
+      person.role === "siswa" ? "/main/pengumumanSiswa" : "/main/pengumuman",
       announcementId
     );
   }
@@ -2460,72 +2904,117 @@ async function fanoutAnnouncement(announcementId, classSubjectId, judul, authorN
     `INSERT INTO notifications (user_id, tipe, judul, isi, link, ref_id) VALUES ${placeholders}`,
     params
   );
-  return students.length;
+  return recipients.length;
+}
+
+// Sasaran yang boleh dipilih tiap peran:
+// admin → semua user, wakasek kurikulum → semua siswa, guru → kelas mapelnya.
+// Guru yang merangkap wakasek kurikulum mendapat keduanya.
+function allowedSasaran(user) {
+  if (user.role === "admin") return ["semua"];
+  const list = [];
+  if (user.role === "guru") list.push("kelas");
+  if (memegangJabatanKurikulum(user)) list.push("siswa");
+  return list;
 }
 
 app.get("/api/announcements", auth, asyncHandler(async (req, res) => {
-  if (req.user.role === "guru") {
-    const rows = await q(
-      `SELECT an.id, an.judul, an.isi, an.prioritas, an.pinned, an.class_subject_id AS classSubjectId,
-              an.created_at AS createdAt, c.nama_kelas AS namaKelas, sub.judul_mapel AS judulMapel
-       FROM announcements an
-       JOIN class_subjects cs ON cs.id = an.class_subject_id
-       JOIN classes c ON c.id = cs.class_id
-       JOIN subjects sub ON sub.id = cs.subject_id
-       WHERE an.author_user_id = ? AND an.deleted_at IS NULL
-       ORDER BY an.pinned DESC, an.created_at DESC`,
-      [req.user.id]
-    );
-    res.json({ data: rows });
-    return;
+  const params = [req.user.id];
+  let visibility = "1 = 0";
+  if (isKurikulum(req.user)) {
+    visibility = "1 = 1";
+  } else if (req.user.role === "guru") {
+    visibility = "(an.sasaran = 'semua' OR an.author_user_id = ?)";
+    params.push(req.user.id);
+  } else if (req.user.role === "siswa") {
+    visibility = `(an.sasaran IN ('semua', 'siswa')
+       OR (an.sasaran = 'kelas'
+           AND cs.class_id IN (SELECT class_id FROM class_students
+                               WHERE siswa_user_id = ? AND status = 'Aktif')))`;
+    params.push(req.user.id);
   }
-  if (req.user.role === "siswa") {
-    const rows = await q(
-      `SELECT an.id, an.judul, an.isi, an.prioritas, an.pinned, an.created_at AS createdAt,
-              u.nama AS pengirim, c.nama_kelas AS namaKelas, sub.judul_mapel AS judulMapel
-       FROM announcements an
-       JOIN class_subjects cs ON cs.id = an.class_subject_id
-       JOIN classes c ON c.id = cs.class_id
-       JOIN subjects sub ON sub.id = cs.subject_id
-       JOIN users u ON u.id = an.author_user_id
-       WHERE an.deleted_at IS NULL
-         AND cs.class_id = (SELECT kelas_id FROM siswa_profiles WHERE user_id = ?)
-       ORDER BY an.pinned DESC, an.created_at DESC`,
-      [req.user.id]
-    );
-    res.json({ data: rows });
-    return;
-  }
-  res.json({ data: [] });
+
+  const rows = await q(
+    `SELECT an.id, an.judul, an.isi, an.prioritas, an.pinned, an.sasaran,
+            an.class_subject_id AS classSubjectId, an.created_at AS createdAt,
+            u.nama AS pengirim, u.role AS peranPengirim,
+            c.nama_kelas AS namaKelas, sub.judul_mapel AS judulMapel,
+            (an.author_user_id = ?) AS milikSaya
+     FROM announcements an
+     JOIN users u ON u.id = an.author_user_id
+     LEFT JOIN class_subjects cs ON cs.id = an.class_subject_id
+     LEFT JOIN classes c ON c.id = cs.class_id
+     LEFT JOIN subjects sub ON sub.id = cs.subject_id
+     WHERE an.deleted_at IS NULL AND ${visibility}
+     ORDER BY an.pinned DESC, an.created_at DESC`,
+    params
+  );
+
+  const sasaran = allowedSasaran(req.user);
+  res.json({
+    data: rows.map((row) => ({ ...row, milikSaya: Boolean(row.milikSaya) })),
+    meta: { canCompose: sasaran.length > 0, allowedSasaran: sasaran },
+  });
 }));
 
-app.post("/api/announcements", auth, requireRole("guru"), asyncHandler(async (req, res) => {
+app.post("/api/announcements", auth, requireRole("admin", "staff", "guru"), asyncHandler(async (req, res) => {
   const { classSubjectId, judul, isi, prioritas = "Normal", pinned = 0 } = req.body;
-  if (!classSubjectId || !judul || !isi) {
-    return res.status(400).json({ message: "Kelas, judul, dan isi wajib diisi" });
+  const izin = allowedSasaran(req.user);
+  if (!izin.length) {
+    return res.status(403).json({ message: "Anda tidak berhak membuat pengumuman" });
   }
-  const owns = await one(
-    "SELECT id FROM class_subjects WHERE id = ? AND guru_user_id = ?",
-    [classSubjectId, req.user.id]
-  );
-  if (!owns) {
-    return res.status(403).json({ message: "Kelas bukan milik Anda" });
+  const sasaran = req.body.sasaran || izin[0];
+  if (!izin.includes(sasaran)) {
+    return res.status(403).json({ message: "Sasaran pengumuman ini tidak diizinkan untuk peran Anda" });
   }
+  if (!judul || !isi) {
+    return res.status(400).json({ message: "Judul dan isi wajib diisi" });
+  }
+
+  if (sasaran === "kelas") {
+    if (!classSubjectId) {
+      return res.status(400).json({ message: "Kelas mapel wajib dipilih" });
+    }
+    const owns = await one(
+      "SELECT id FROM class_subjects WHERE id = ? AND guru_user_id = ?",
+      [classSubjectId, req.user.id]
+    );
+    if (!owns) {
+      return res.status(403).json({ message: "Kelas bukan milik Anda" });
+    }
+  }
+
+  const targetClassSubjectId = sasaran === "kelas" ? classSubjectId : null;
   const result = await q(
-    `INSERT INTO announcements (author_user_id, class_subject_id, judul, isi, prioritas, pinned)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [req.user.id, classSubjectId, judul, isi, prioritas, pinned ? 1 : 0]
+    `INSERT INTO announcements (author_user_id, class_subject_id, sasaran, judul, isi, prioritas, pinned)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [req.user.id, targetClassSubjectId, sasaran, judul, isi, prioritas, pinned ? 1 : 0]
   );
-  const penerima = await fanoutAnnouncement(result.insertId, classSubjectId, judul, req.user.nama);
+  const penerima = await fanoutAnnouncement(
+    result.insertId,
+    sasaran,
+    targetClassSubjectId,
+    judul,
+    req.user.nama,
+    req.user.id
+  );
   await logActivity(req.user.id, "Buat pengumuman", "announcements", result.insertId, judul);
-  res.status(201).json({ id: result.insertId, penerima });
+  res.status(201).json({ id: result.insertId, penerima, sasaran });
 }));
 
-app.delete("/api/announcements/:id", auth, requireRole("guru"), asyncHandler(async (req, res) => {
-  await q(
-    "UPDATE announcements SET deleted_at = NOW() WHERE id = ? AND author_user_id = ?",
-    [req.params.id, req.user.id]
+app.delete("/api/announcements/:id", auth, requireRole("admin", "staff", "guru"), asyncHandler(async (req, res) => {
+  // Admin boleh menghapus pengumuman siapa pun; peran lain hanya miliknya sendiri.
+  const scope = req.user.role === "admin" ? "" : "AND author_user_id = ?";
+  const params = req.user.role === "admin"
+    ? [req.params.id]
+    : [req.params.id, req.user.id];
+  const result = await q(
+    `UPDATE announcements SET deleted_at = NOW() WHERE id = ? AND deleted_at IS NULL ${scope}`,
+    params
   );
+  if (!result.affectedRows) {
+    return res.status(403).json({ message: "Pengumuman ini bukan milik Anda" });
+  }
   await q("DELETE FROM notifications WHERE tipe = 'announcement' AND ref_id = ?", [req.params.id]);
   await logActivity(req.user.id, "Hapus pengumuman", "announcements", req.params.id);
   res.json({ ok: true });
@@ -2611,6 +3100,53 @@ async function ensureSchema() {
     INDEX idx_notif_user (user_id, is_read),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // Riwayat keanggotaan kelas. siswa_profiles.kelas_id tetap dipakai sebagai
+  // penunjuk kelas yang sedang aktif, sedangkan tabel ini menyimpan seluruh
+  // riwayatnya supaya nilai di kelas lama tidak ikut hilang saat siswa naik.
+  await q(`CREATE TABLE IF NOT EXISTS class_students (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    class_id INT NOT NULL,
+    siswa_user_id INT NOT NULL,
+    academic_year_id INT NOT NULL,
+    status ENUM('Aktif', 'Naik', 'Tinggal', 'Lulus', 'Pindah') NOT NULL DEFAULT 'Aktif',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_class_student (class_id, siswa_user_id),
+    KEY idx_class_student_siswa (siswa_user_id),
+    FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+    FOREIGN KEY (siswa_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (academic_year_id) REFERENCES academic_years(id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+  // Pengumuman kini punya tiga sasaran: semua user (admin), semua siswa
+  // (wakasek kurikulum), dan satu kelas mapel (guru). Dua sasaran pertama
+  // tidak terikat kelas, jadi class_subject_id harus boleh NULL.
+  await ensureColumn(
+    "announcements",
+    "sasaran",
+    "sasaran ENUM('semua', 'siswa', 'kelas') NOT NULL DEFAULT 'kelas' AFTER class_subject_id"
+  );
+  const classSubjectColumn = await one(
+    `SELECT IS_NULLABLE AS isNullable FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'announcements'
+       AND COLUMN_NAME = 'class_subject_id'`
+  );
+  if (classSubjectColumn && classSubjectColumn.isNullable === "NO") {
+    await q("ALTER TABLE announcements MODIFY class_subject_id INT NULL");
+  }
+}
+
+// Tambah kolom hanya kalau belum ada, supaya aman dijalankan tiap startup.
+async function ensureColumn(table, column, definition) {
+  const exists = await one(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column]
+  );
+  if (!exists) {
+    await q(`ALTER TABLE \`${table}\` ADD COLUMN ${definition}`);
+  }
 }
 
 // Jalankan satu file .sql lewat koneksi multipleStatements tersendiri.
@@ -2657,6 +3193,23 @@ async function autoMigrate() {
   }
 }
 
+// Setiap siswa yang punya kelas aktif harus punya baris riwayat keanggotaan.
+// Dijalankan sesudah seed supaya siswa hasil seed ikut terdaftar, dan aman
+// diulang tiap startup karena INSERT IGNORE.
+async function backfillClassMemberships() {
+  const result = await q(
+    `INSERT IGNORE INTO class_students (class_id, siswa_user_id, academic_year_id, status)
+     SELECT sp.kelas_id, sp.user_id, c.academic_year_id, 'Aktif'
+     FROM siswa_profiles sp
+     JOIN classes c ON c.id = sp.kelas_id
+     JOIN users u ON u.id = sp.user_id
+     WHERE sp.kelas_id IS NOT NULL AND u.deleted_at IS NULL`
+  );
+  if (result.affectedRows) {
+    console.log(`class_students: ${result.affectedRows} keanggotaan kelas ditambahkan.`);
+  }
+}
+
 // Data demo guru (kelas, rubrik, jadwal, dan penilaian yang sudah terisi).
 // Ikut dijalankan tiap startup: bagian INSERT-nya idempoten, dan bagian akhir
 // file menggeser ulang seluruh tanggal demo relatif terhadap hari ini supaya
@@ -2673,6 +3226,7 @@ const host = process.env.HOST || "127.0.0.1";
 autoMigrate()
   .then(() => ensureSchema())
   .then(() => seedDemo())
+  .then(() => backfillClassMemberships())
   .then(() => {
     app.listen(port, host, () => {
       console.log(`E-learning SMA API running on http://${host}:${port}`);
