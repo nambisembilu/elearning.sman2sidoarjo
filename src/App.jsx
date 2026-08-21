@@ -10,6 +10,7 @@ import {
   Clock,
   Download,
   Edit3,
+  FileSpreadsheet,
   FileText,
   GraduationCap,
   Home,
@@ -57,6 +58,7 @@ import {
   useParams,
 } from "react-router-dom";
 import {
+  apiDownload,
   apiFetch,
   clearSession,
   getStoredSession,
@@ -4112,6 +4114,7 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [exporting, setExporting] = useState(false);
 
   // Sync prop → state saat route berganti (backup selain key prop)
   useEffect(() => {
@@ -4350,6 +4353,22 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
 
   const needsClassSelect = !classSubjectId;
 
+  // Unduh format import nilai akhir rapor (F_NILAI_RAPOR) untuk kelas mapel ini.
+  const exportRapor = async () => {
+    setExporting(true);
+    try {
+      await apiDownload(withQuery("/grades/export", {
+        classSubjectId: selected,
+        semesterId: isGuru && !classSubjectId ? selectedSemesterId : "",
+      }));
+      show("Format nilai akhir rapor berhasil diunduh");
+    } catch (err) {
+      show(err.message || "Gagal mengunduh format rapor", "error");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div>
       {toastNode}
@@ -4427,6 +4446,24 @@ function GradesPage({ classSubjectId, compact = false, type = "final" }) {
         <div className="mb-3 flex items-center gap-2 rounded-lg border bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
           <Edit3 className="h-3.5 w-3.5 shrink-0" />
           Klik sel nilai untuk menginput atau mengubah nilai siswa. Tekan <kbd className="mx-1 rounded bg-blue-100 px-1.5 py-0.5 text-xs font-mono">Enter</kbd> untuk simpan atau <kbd className="mx-1 rounded bg-blue-100 px-1.5 py-0.5 text-xs font-mono">Esc</kbd> untuk batal.
+        </div>
+      )}
+
+      {selected && isFinal && allRows !== null && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-emerald-50 px-4 py-2.5 text-sm text-emerald-900">
+          <span className="flex items-center gap-2">
+            <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
+            Unduh format import nilai akhir rapor (F_NILAI_RAPOR) berisi NISN, NIS, nilai, dan deskripsi ketercapaian kompetensi.
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportRapor}
+            disabled={exporting || !allRows.length}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {exporting ? "Menyiapkan..." : "Export Format Rapor"}
+          </Button>
         </div>
       )}
 

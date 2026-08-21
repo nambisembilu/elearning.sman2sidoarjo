@@ -1,6 +1,7 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 import cors from "cors";
+import ExcelJS from "exceljs";
 import express from "express";
 import fs from "node:fs";
 import jwt from "jsonwebtoken";
@@ -19,6 +20,8 @@ fs.mkdirSync(uploadDir, { recursive: true });
 const app = express();
 const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || "elearning-sma-local-secret";
+// Dipakai pada kop format import rapor yang diekspor guru.
+const SCHOOL_NAME = process.env.SCHOOL_NAME || "SMA NEGERI 2 SIDOARJO";
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || "127.0.0.1",
@@ -2143,47 +2146,81 @@ app.delete("/api/groups/:id", auth, requireRole("admin", "staff", "guru"), async
   res.json({ ok: true });
 }));
 
-app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler(async (req, res) => {
-  const { classSubjectId, semesterId } = req.query;
-  const type = req.query.type || "final";
-
+// Validasi akses rekap nilai — dipakai bersama oleh /api/grades dan ekspornya
+// supaya aturan kewenangan guru hanya ditulis di satu tempat.
+async function resolveGradeContext(user, { classSubjectId, semesterId, type }) {
   if (!classSubjectId) {
-    return res.status(400).json({ message: "classSubjectId diperlukan" });
+    return { error: { status: 400, message: "classSubjectId diperlukan" } };
   }
 
   // Guru hanya berwenang atas penilaian tugas, sumatif LM, ujian sumatif, dan nilai akhir.
-  if (isPlainGuru(req.user) && !GURU_GRADE_TYPES.includes(type)) {
-    return res.status(403).json({ message: "Jenis penilaian ini tidak dapat diakses guru" });
+  if (isPlainGuru(user) && !GURU_GRADE_TYPES.includes(type)) {
+    return { error: { status: 403, message: "Jenis penilaian ini tidak dapat diakses guru" } };
   }
 
   const classSubject = await one(
-    "SELECT id, guru_user_id AS guruUserId, academic_year_id AS academicYearId FROM class_subjects WHERE id = ?",
+    `SELECT cs.id, cs.guru_user_id AS guruUserId, cs.academic_year_id AS academicYearId,
+            c.nama_kelas AS namaKelas, s.judul_mapel AS judulMapel,
+            g.nama AS guruPengampu, ay.tahun_ajaran AS tahunAjaran
+     FROM class_subjects cs
+     JOIN classes c ON c.id = cs.class_id
+     JOIN subjects s ON s.id = cs.subject_id
+     JOIN users g ON g.id = cs.guru_user_id
+     JOIN academic_years ay ON ay.id = cs.academic_year_id
+     WHERE cs.id = ?`,
     [classSubjectId]
   );
   if (!classSubject) {
-    return res.status(404).json({ message: "Kelas mata pelajaran tidak ditemukan" });
+    return { error: { status: 404, message: "Kelas mata pelajaran tidak ditemukan" } };
   }
 
   // Guru hanya boleh lihat kelas yang diampunya sendiri.
-  if (isPlainGuru(req.user) && Number(classSubject.guruUserId) !== Number(req.user.id)) {
-    return res.status(403).json({ message: "Akses tidak diizinkan untuk kelas ini" });
+  if (isPlainGuru(user) && Number(classSubject.guruUserId) !== Number(user.id)) {
+    return { error: { status: 403, message: "Akses tidak diizinkan untuk kelas ini" } };
   }
 
   // Semester harus berasal dari tahun ajaran kelas yang dipilih.
+  let semester = null;
   if (semesterId) {
-    const semester = await one(
-      "SELECT id FROM semesters WHERE id = ? AND academic_year_id = ?",
+    semester = await one(
+      `SELECT id, judul_semester AS judulSemester FROM semesters
+       WHERE id = ? AND academic_year_id = ?`,
       [semesterId, classSubject.academicYearId]
     );
     if (!semester) {
-      return res.status(400).json({ message: "Semester tidak sesuai dengan tahun ajaran kelas" });
+      return { error: { status: 400, message: "Semester tidak sesuai dengan tahun ajaran kelas" } };
     }
   }
 
+  return { classSubject, semester };
+}
+
+// Kategori capaian dipetakan ke kolom rubrik tujuan pembelajaran:
+// "Sangat Baik" -> sangat_baik, "Perlu Bimbingan" -> perlu_bimbingan, dst.
+function rubricFieldForKategori(kategori) {
+  return String(kategori || "").toLowerCase().replace(/\s+/g, "_");
+}
+
+// Pemeta nilai -> kategori capaian, bersumber dari tabel grade_ranges.
+async function capaianResolver() {
+  const gradeRanges = await q(
+    "SELECT kategori, min_nilai AS minNilai, max_nilai AS maxNilai FROM grade_ranges ORDER BY min_nilai DESC"
+  );
+  return function getCapaian(score) {
+    if (score === null || score === undefined) return "-";
+    const range = gradeRanges.find((r) => score >= r.minNilai && score <= r.maxNilai);
+    return range ? range.kategori : (score >= 75 ? "Baik" : "Perlu Bimbingan");
+  };
+}
+
+// Perhitungan rekap nilai. Menghasilkan satu baris per siswa lengkap dengan
+// rubrik tujuan pembelajaran tiap penilaian, supaya ekspor rapor bisa menyusun
+// deskripsi ketercapaian tanpa query ulang.
+async function buildGradeRows({ classSubjectId, semesterId, type }) {
   // Ambil siswa sekali. Sumbernya riwayat keanggotaan, bukan kelas aktif,
   // supaya rekap kelas lama tetap utuh setelah siswanya naik kelas.
   const students = await q(
-    `SELECT u.id AS siswaId, sp.nis, u.nama AS namaSiswa, cst.status AS statusKeanggotaan
+    `SELECT u.id AS siswaId, sp.nis, sp.nisn, u.nama AS namaSiswa, cst.status AS statusKeanggotaan
      FROM class_subjects cs
      JOIN class_students cst ON cst.class_id = cs.class_id
      JOIN users u ON u.id = cst.siswa_user_id
@@ -2193,14 +2230,18 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
     [classSubjectId]
   );
 
-  if (!students.length) return res.json({ data: [], total: 0 });
+  if (!students.length) return { rows: [], getCapaian: await capaianResolver() };
+
+  // Kolom rubrik ikut diambil supaya deskripsi ketercapaian tersedia di ekspor.
+  const rubricSelect = `lo.deskripsi AS loDeskripsi, lo.perlu_bimbingan AS perlu_bimbingan,
+            lo.cukup AS cukup, lo.baik AS baik, lo.sangat_baik AS sangat_baik`;
 
   // Ambil semua tugas sekali
   const assignmentParams = [classSubjectId];
   const assignmentSemesterFilter = semesterId ? "AND rs.semester_id = ?" : "";
   if (semesterId) assignmentParams.push(semesterId);
   const allAssignments = await q(
-    `SELECT a.id, a.judul
+    `SELECT a.id, a.judul, ${rubricSelect}
      FROM assignments a
      LEFT JOIN learning_objectives lo ON lo.id = a.learning_objective_id
      LEFT JOIN rubric_scopes rs ON rs.id = lo.rubric_scope_id
@@ -2214,7 +2255,7 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
   const examSemesterFilter = semesterId ? "AND rs.semester_id = ?" : "";
   if (semesterId) examParams.push(semesterId);
   const allExams = await q(
-    `SELECT e.id, e.judul, e.tipe_ujian AS tipeUjian
+    `SELECT e.id, e.judul, e.tipe_ujian AS tipeUjian, ${rubricSelect}
      FROM exams e
      LEFT JOIN learning_objectives lo ON lo.id = e.learning_objective_id
      LEFT JOIN rubric_scopes rs ON rs.id = lo.rubric_scope_id
@@ -2256,24 +2297,25 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
       )
     : [];
 
-  // Grade ranges untuk capaian
-  const gradeRanges = await q(
-    "SELECT kategori, min_nilai AS minNilai, max_nilai AS maxNilai FROM grade_ranges ORDER BY min_nilai DESC"
-  );
-  function getCapaian(score) {
-    if (score === null || score === undefined) return "-";
-    const range = gradeRanges.find((r) => score >= r.minNilai && score <= r.maxNilai);
-    return range ? range.kategori : (score >= 75 ? "Baik" : "Perlu Bimbingan");
-  }
+  const getCapaian = await capaianResolver();
 
-  const result = students.map((student) => {
+  // Rubrik dilampirkan per penilaian, bukan per siswa, jadi cukup dipetakan sekali.
+  const rubricOf = (item) => ({
+    deskripsi: item.loDeskripsi || null,
+    perlu_bimbingan: item.perlu_bimbingan || null,
+    cukup: item.cukup || null,
+    baik: item.baik || null,
+    sangat_baik: item.sangat_baik || null,
+  });
+
+  const rows = students.map((student) => {
     // Tugas: tampilkan saat type=assignments atau final
     const nilaiTugas = (type === "assignments" || type === "final")
       ? allAssignments.map((a) => {
           const sub = allSubs.find(
             (s) => s.assignment_id === a.id && s.siswa_user_id === student.siswaId
           );
-          return { id: a.id, judul: a.judul, nilai: sub?.nilai ?? null };
+          return { id: a.id, judul: a.judul, nilai: sub?.nilai ?? null, rubrik: rubricOf(a) };
         })
       : [];
 
@@ -2283,7 +2325,13 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
           const ans = allAnswers.find(
             (a) => a.exam_id === e.id && a.siswa_user_id === student.siswaId
           );
-          return { id: e.id, judul: e.judul, tipeUjian: e.tipeUjian, nilai: ans?.total ?? null };
+          return {
+            id: e.id,
+            judul: e.judul,
+            tipeUjian: e.tipeUjian,
+            nilai: ans?.total ?? null,
+            rubrik: rubricOf(e),
+          };
         })
       : [];
 
@@ -2299,6 +2347,7 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
     return {
       siswaId: student.siswaId,
       nis: student.nis,
+      nisn: student.nisn,
       namaSiswa: student.namaSiswa,
       nilaiTugas,
       nilaiUjian,
@@ -2307,7 +2356,206 @@ app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler
     };
   });
 
-  res.json({ data: result, total: result.length });
+  return { rows, getCapaian };
+}
+
+app.get("/api/grades", auth, requireRole("admin", "staff", "guru"), asyncHandler(async (req, res) => {
+  const { classSubjectId, semesterId } = req.query;
+  const type = req.query.type || "final";
+
+  const context = await resolveGradeContext(req.user, { classSubjectId, semesterId, type });
+  if (context.error) {
+    return res.status(context.error.status).json({ message: context.error.message });
+  }
+
+  const { rows } = await buildGradeRows({ classSubjectId, semesterId, type });
+
+  // Rubrik hanya dipakai ekspor rapor; tabel nilai tidak perlu memuatnya.
+  const data = rows.map((row) => ({
+    ...row,
+    nilaiTugas: row.nilaiTugas.map(({ rubrik, ...item }) => item),
+    nilaiUjian: row.nilaiUjian.map(({ rubrik, ...item }) => item),
+  }));
+
+  res.json({ data, total: data.length });
+}));
+
+// Ekspor nilai akhir ke format import rapor (F_NILAI_RAPOR). Sengaja hanya
+// untuk type=final: format rapor memuat satu nilai akhir per siswa.
+app.get("/api/grades/export", auth, requireRole("admin", "staff", "guru"), asyncHandler(async (req, res) => {
+  const { classSubjectId } = req.query;
+
+  const context = await resolveGradeContext(req.user, {
+    classSubjectId,
+    semesterId: req.query.semesterId,
+    type: "final",
+  });
+  if (context.error) {
+    return res.status(context.error.status).json({ message: context.error.message });
+  }
+
+  const { classSubject } = context;
+
+  // Header rapor butuh semester. Bila filter semester tidak dipakai (tampilan
+  // staff), pakai semester aktif pada tahun ajaran kelas ini.
+  const semester = context.semester || await one(
+    `SELECT id, judul_semester AS judulSemester FROM semesters
+     WHERE academic_year_id = ?
+     ORDER BY is_active DESC, judul_semester ASC
+     LIMIT 1`,
+    [classSubject.academicYearId]
+  );
+  if (!semester) {
+    return res.status(400).json({ message: "Semester tahun ajaran kelas belum tersedia" });
+  }
+
+  const semesterKe = semester.judulSemester === "Genap" ? 2 : 1;
+  const tahunMulai = String(classSubject.tahunAjaran || "").slice(0, 4);
+  const kdSemester = `${tahunMulai}${semesterKe} / ${semesterKe}`;
+
+  const { rows, getCapaian } = await buildGradeRows({
+    classSubjectId,
+    semesterId: semester.id,
+    type: "final",
+  });
+
+  // Deskripsi ketercapaian diambil dari rubrik tujuan pembelajaran penilaian
+  // dengan nilai tertinggi dan terendah milik siswa itu sendiri.
+  function deskripsiCapaian(row, pick) {
+    // Hanya penilaian bernilai yang tujuan pembelajarannya sudah berdeskripsi —
+    // tugas tanpa TP tidak boleh merebut posisi tertinggi lalu mengosongkan kolom.
+    const scored = [...row.nilaiTugas, ...row.nilaiUjian].filter(
+      (item) => item.nilai !== null
+        && item.nilai !== undefined
+        && item.rubrik
+        && Object.values(item.rubrik).some(Boolean)
+    );
+    if (!scored.length) return "";
+
+    const target = scored.reduce((best, item) =>
+      (pick === "max"
+        ? Number(item.nilai) > Number(best.nilai)
+        : Number(item.nilai) < Number(best.nilai)) ? item : best
+    );
+
+    const kategori = getCapaian(Number(target.nilai));
+    const field = rubricFieldForKategori(kategori);
+    return target.rubrik[field] || target.rubrik.deskripsi || "";
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = SCHOOL_NAME;
+  workbook.created = new Date();
+  const sheet = workbook.addWorksheet("F_NILAI_RAPOR", {
+    // Kolom deskripsi lebar, jadi lembar ini dicetak melebar dan dipaskan.
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    views: [{ state: "frozen", ySplit: 10 }],
+  });
+
+  const border = {
+    top: { style: "thin" }, left: { style: "thin" },
+    bottom: { style: "thin" }, right: { style: "thin" },
+  };
+  const headerFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFC6E0B4" } };
+
+  sheet.columns = [
+    { width: 5 },  // NO
+    { width: 34 }, // NAMA SISWA
+    { width: 16 }, // NISN
+    { width: 10 }, // NIS
+    { width: 9 },  // NILAI
+    { width: 42 }, // Capaian Tertinggi
+    { width: 42 }, // Capaian Terendah
+  ];
+
+  // Identitas rapor: label di kolom A–B, isian di kolom C.
+  const identitas = [
+    ["SEKOLAH", `: ${SCHOOL_NAME}`],
+    ["KD SEMESTER", `: ${kdSemester}`],
+    ["MATA PELAJARAN", `: ${classSubject.judulMapel}`],
+    ["KELAS", `: ${classSubject.namaKelas}`],
+    ["SEMESTER KE", `: ${semesterKe}`],
+    ["ID FORMAT", "F_NILAI_RAPOR"],
+  ];
+
+  const judul = sheet.addRow(["FORMAT IMPORT NILAI AKHIR RAPOR SISWA"]);
+  sheet.mergeCells(judul.number, 1, judul.number, 2);
+  judul.getCell(1).font = { bold: true, size: 12 };
+  judul.getCell(1).border = border;
+
+  identitas.forEach(([label, value]) => {
+    const row = sheet.addRow([label, "", value]);
+    sheet.mergeCells(row.number, 1, row.number, 2);
+    row.getCell(1).font = { bold: true };
+    row.getCell(1).border = border;
+    row.getCell(3).border = border;
+  });
+
+  // Kepala tabel tiga tingkat, mengikuti format import rapor.
+  const head1 = sheet.addRow(["NO", "NAMA SISWA", "NISN", "NIS", "NILAI RAPOR SISWA"]);
+  const head2 = sheet.addRow(["", "", "", "", "NILAI", "DESKRIPSI KETERCAPAIAN KOMPETENSI"]);
+  const head3 = sheet.addRow(["", "", "", "", "", "Capaian Tertinggi", "Capaian Terendah"]);
+
+  [1, 2, 3, 4].forEach((col) => sheet.mergeCells(head1.number, col, head3.number, col));
+  sheet.mergeCells(head1.number, 5, head1.number, 7); // NILAI RAPOR SISWA
+  sheet.mergeCells(head2.number, 5, head3.number, 5); // NILAI
+  sheet.mergeCells(head2.number, 6, head2.number, 7); // DESKRIPSI KETERCAPAIAN KOMPETENSI
+
+  [head1, head2, head3].forEach((row) => {
+    row.height = 18;
+    for (let col = 1; col <= 7; col += 1) {
+      const cell = row.getCell(col);
+      cell.fill = headerFill;
+      cell.border = border;
+      cell.font = { bold: true, size: 10 };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+  });
+
+  rows.forEach((row, index) => {
+    const dataRow = sheet.addRow([
+      index + 1,
+      row.namaSiswa,
+      row.nisn,
+      row.nis,
+      row.nilaiAkhir ?? "",
+      deskripsiCapaian(row, "max"),
+      deskripsiCapaian(row, "min"),
+    ]);
+    dataRow.height = 32;
+    for (let col = 1; col <= 7; col += 1) {
+      const cell = dataRow.getCell(col);
+      cell.border = border;
+      cell.alignment = {
+        vertical: "top",
+        wrapText: col >= 6,
+        horizontal: col === 1 || col === 5 ? "center" : "left",
+      };
+    }
+    dataRow.getCell(3).font = { bold: true };
+    // NISN/NIS adalah identitas, bukan bilangan — jangan sampai nol depannya hilang.
+    dataRow.getCell(3).numFmt = "@";
+    dataRow.getCell(4).numFmt = "@";
+  });
+
+  const namaFile = `F_NILAI_RAPOR_${classSubject.namaKelas}_${classSubject.judulMapel}_SMT${semesterKe}`
+    .replace(/[^\w.-]+/g, "_");
+
+  await logActivity(
+    req.user.id,
+    "Ekspor nilai akhir rapor",
+    "class_subjects",
+    classSubject.id,
+    `${rows.length} siswa`
+  );
+
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  );
+  res.setHeader("Content-Disposition", `attachment; filename="${namaFile}.xlsx"`);
+  await workbook.xlsx.write(res);
+  res.end();
 }));
 
 // Rekap nilai untuk siswa — hanya nilai miliknya sendiri, selalu read-only.
